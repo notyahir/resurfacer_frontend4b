@@ -435,64 +435,7 @@ async function handleEndSession() {
 
 <template>
   <section class="swipe-shell">
-    <header class="swipe-header">
-      <div>
-        <span class="badge">Swipe Sessions</span>
-        <h2>Turn resurfacing into a game</h2>
-        <p>
-          Match your current vibe in minutes. Start a session, preview each resurfaced track, and decide whether to keep,
-          snooze, or route it into a fresh playlist.
-        </p>
-      </div>
-      <form class="launch-form" @submit.prevent="startNewSession">
-        <label>
-          <span>User ID</span>
-          <input v-model="form.userId" type="text" placeholder="Enter a user id" required />
-        </label>
-        <label>
-          <span>Batch size</span>
-          <input v-model.number="form.size" min="1" type="number" />
-        </label>
-        <label class="queue-field">
-          <span>Queue tracks (one per line)</span>
-          <textarea
-            v-model="form.queueText"
-            rows="4"
-            placeholder="track-001&#10;track-002&#10;track-003"
-          />
-        </label>
-        <div class="likes-actions">
-          <button type="button" :disabled="likesLoading || !form.userId.trim()" @click="loadLikedQueue">
-            <span v-if="likesLoading">Loading liked tracks…</span>
-            <span v-else>Load from liked songs</span>
-          </button>
-          <p v-if="likesError" class="likes-status likes-status--error">{{ likesError }}</p>
-          <p v-else-if="likesPulledCount !== null" class="likes-status">
-            Loaded {{ likesPulledCount }} liked tracks
-            <template v-if="likesSource === 'offline-demo'"> from cached snapshot</template>
-            <template v-else> from backend</template>
-            into the queue.
-          </p>
-        </div>
-        <div v-if="likesPreview.length" class="likes-preview">
-          <span>First up from the cache:</span>
-          <ul>
-            <li v-for="label in likesPreview" :key="label">{{ label }}</li>
-          </ul>
-        </div>
-        <div class="queue-summary">
-          <span v-if="queueCount">{{ queueCount }} tracks queued.</span>
-          <span v-else>No tracks queued yet.</span>
-          <span v-if="resolvedSizePreview">Session will request {{ resolvedSizePreview }} swipes.</span>
-        </div>
-        <button :disabled="starting" type="submit">
-          <span v-if="starting">Starting…</span>
-          <span v-else>{{ sessionActive ? 'Restart session' : 'Start swiping' }}</span>
-        </button>
-      </form>
-    </header>
-
-    <div class="swipe-body">
+    <div class="swipe-focus">
       <article v-if="error" class="alert">{{ error }}</article>
 
       <div v-if="sessionActive" class="session-status">
@@ -594,8 +537,67 @@ async function handleEndSession() {
       <div v-else-if="sessionActive" class="track-card track-card--loading">
         <span>Loading next track…</span>
       </div>
+    </div>
 
-      <div class="decision-log" v-if="decisionLog.length">
+    <header class="swipe-header">
+      <div>
+        <span class="badge">Swipe Sessions</span>
+        <h2>Turn resurfacing into a game</h2>
+        <p>
+          Match your current vibe in minutes. Start a session, preview each resurfaced track, and decide whether to keep,
+          snooze, or route it into a fresh playlist.
+        </p>
+      </div>
+      <form class="launch-form" @submit.prevent="startNewSession">
+        <label>
+          <span>User ID</span>
+          <input v-model="form.userId" type="text" placeholder="Enter a user id" required />
+        </label>
+        <label>
+          <span>Batch size</span>
+          <input v-model.number="form.size" min="1" type="number" />
+        </label>
+        <label class="queue-field">
+          <span>Queue tracks (one per line)</span>
+          <textarea
+            v-model="form.queueText"
+            rows="4"
+            placeholder="track-001&#10;track-002&#10;track-003"
+          />
+        </label>
+        <div class="likes-actions">
+          <button type="button" :disabled="likesLoading || !form.userId.trim()" @click="loadLikedQueue">
+            <span v-if="likesLoading">Loading liked tracks…</span>
+            <span v-else>Load from liked songs</span>
+          </button>
+          <p v-if="likesError" class="likes-status likes-status--error">{{ likesError }}</p>
+          <p v-else-if="likesPulledCount !== null" class="likes-status">
+            Loaded {{ likesPulledCount }} liked tracks
+            <template v-if="likesSource === 'offline-demo'"> from cached snapshot</template>
+            <template v-else> from backend</template>
+            into the queue.
+          </p>
+        </div>
+        <div v-if="likesPreview.length" class="likes-preview">
+          <span>First up from the cache:</span>
+          <ul>
+            <li v-for="label in likesPreview" :key="label">{{ label }}</li>
+          </ul>
+        </div>
+        <div class="queue-summary">
+          <span v-if="queueCount">{{ queueCount }} tracks queued.</span>
+          <span v-else>No tracks queued yet.</span>
+          <span v-if="resolvedSizePreview">Session will request {{ resolvedSizePreview }} swipes.</span>
+        </div>
+        <button :disabled="starting" type="submit">
+          <span v-if="starting">Starting…</span>
+          <span v-else>{{ sessionActive ? 'Restart session' : 'Start swiping' }}</span>
+        </button>
+      </form>
+    </header>
+
+    <div class="swipe-history" v-if="decisionLog.length">
+      <div class="decision-log">
         <h3>Latest decisions</h3>
         <ul>
           <li v-for="decision in decisionLog" :key="decision.timestamp">
@@ -784,10 +786,17 @@ async function handleEndSession() {
   box-shadow: 0 14px 24px rgba(29, 185, 84, 0.28);
 }
 
-.swipe-body {
+.swipe-focus {
   display: flex;
   flex-direction: column;
   gap: 1.75rem;
+}
+
+.swipe-history {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-top: 1rem;
 }
 
 .alert {
