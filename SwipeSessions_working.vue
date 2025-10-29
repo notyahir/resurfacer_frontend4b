@@ -6,8 +6,7 @@ import {
   decideKeep,
   decideSnooze,
   decideAddToPlaylist,
-  endSession,
-  type SessionMode
+  endSession
 } from '../services/swipeSessions'
 import { getLikedTracks, type LikedTracksSource } from '../services/libraryCache'
 import { getDemoTrackMeta, getDemoLikeEntry } from '../data/demoLibraryCache'
@@ -39,8 +38,6 @@ const loading = ref(false)
 const sessionComplete = ref(false)
 const currentTrack = ref<string | null>(null)
 const error = ref<string | null>(null)
-const sessionMode = ref<SessionMode | null>(null)
-const statusNotice = ref<string | null>(null)
 const decisionLog = ref<DecisionRecord[]>([])
 const startedAt = ref<number | null>(null)
 const likesLoading = ref(false)
@@ -221,6 +218,16 @@ const queueCount = computed(() => parsedQueueTracks.value.length)
 
 const requestedSize = computed(() => (Number.isFinite(form.size) && form.size > 0 ? form.size : 0))
 
+const resolvedSizePreview = computed(() => {
+  if (!queueCount.value) {
+    return requestedSize.value
+  }
+  if (!requestedSize.value) {
+    return queueCount.value
+  }
+  return Math.min(requestedSize.value, queueCount.value)
+})
+
 watch(
   () => props.seedTracks,
   (tracks) => {
@@ -290,24 +297,12 @@ async function loadLikedQueue() {
   }
 }
 
-function applySessionMode(mode?: unknown) {
-  if (mode !== 'offline' && mode !== 'shadow') return
-  sessionMode.value = mode
-  if (mode === 'offline') {
-    statusNotice.value = 'Connection to the swipe service dropped. Showing demo tracks so you can keep reviewing.'
-  } else {
-    statusNotice.value = null
-  }
-}
-
 async function startNewSession() {
   error.value = null
   sessionComplete.value = false
   currentTrack.value = null
   decisionLog.value = []
   loading.value = false
-  sessionMode.value = null
-  statusNotice.value = null
 
   try {
     starting.value = true
@@ -327,7 +322,6 @@ async function startNewSession() {
       queueTracks: queueTracks.length ? queueTracks : undefined
     })
     sessionId.value = result.sessionId
-    applySessionMode(result.mode)
     startedAt.value = Date.now()
     await loadNextTrack()
   } catch (err) {
@@ -344,8 +338,7 @@ async function loadNextTrack() {
   error.value = null
 
   try {
-    const { trackId, mode } = await fetchNext({ sessionId: sessionId.value })
-    applySessionMode(mode)
+    const { trackId } = await fetchNext({ sessionId: sessionId.value })
 
     if (trackId === '-1') {
       sessionComplete.value = true
@@ -376,8 +369,7 @@ async function handleKeep() {
   loading.value = true
 
   try {
-    const result = await decideKeep({ sessionId: sessionId.value, trackId: currentTrack.value })
-    applySessionMode(result.mode)
+    await decideKeep({ sessionId: sessionId.value, trackId: currentTrack.value })
     recordDecision('keep')
     await loadNextTrack()
   } catch (err) {
@@ -393,8 +385,7 @@ async function handleSnooze(durationMs: number) {
 
   try {
     const untilAt = Date.now() + durationMs
-    const result = await decideSnooze({ sessionId: sessionId.value, trackId: currentTrack.value, untilAt })
-    applySessionMode(result.mode)
+    await decideSnooze({ sessionId: sessionId.value, trackId: currentTrack.value, untilAt })
     recordDecision('snooze', `Snoozed until ${new Date(untilAt).toLocaleString()}`)
     await loadNextTrack()
   } catch (err) {
@@ -409,12 +400,11 @@ async function handleAddToPlaylist() {
   loading.value = true
 
   try {
-    const result = await decideAddToPlaylist({
+    await decideAddToPlaylist({
       sessionId: sessionId.value,
       trackId: currentTrack.value,
       playlistId: form.playlistId.trim()
     })
-    applySessionMode(result.mode)
     recordDecision('add-to-playlist', `Added to ${form.playlistId.trim()}`)
     await loadNextTrack()
   } catch (err) {
@@ -440,8 +430,6 @@ async function handleEndSession() {
   sessionComplete.value = false
   currentTrack.value = null
   startedAt.value = null
-  sessionMode.value = null
-  statusNotice.value = null
 }
 </script>
 
@@ -449,7 +437,6 @@ async function handleEndSession() {
   <section class="swipe-shell">
     <div class="swipe-focus">
       <article v-if="error" class="alert">{{ error }}</article>
-      <article v-else-if="statusNotice" class="notice">{{ statusNotice }}</article>
 
       <div v-if="sessionActive" class="session-status">
         <div>
@@ -460,16 +447,12 @@ async function handleEndSession() {
           <span class="status-label">Elapsed</span>
           <strong>{{ sessionElapsedMinutes }} min</strong>
         </div>
-        <div v-if="sessionMode === 'offline'">
-          <span class="status-label">Mode</span>
-          <strong>Offline demo</strong>
-        </div>
         <button class="session-end" type="button" @click="handleEndSession">End session</button>
       </div>
 
       <div v-if="sessionComplete" class="session-complete">
         <h3>Session complete</h3>
-        <p>You reviewed {{ decisionLog.length }} tracks. Start a new session to continue.</p>
+        <p>You resurfaced {{ decisionLog.length }} tracks this round. Restart above to keep the momentum going.</p>
       </div>
 
       <div v-else-if="currentTrack" class="track-card">
@@ -491,7 +474,8 @@ async function handleEndSession() {
             <h3>{{ currentTrackTitle }}</h3>
             <p v-if="currentTrackArtist" class="track-artist">{{ currentTrackArtist }}</p>
             <p>
-              Choose what to do with this track: keep it active, snooze it to review later, or add it to a playlist.
+              Decide how this resurfaced track should behave next. Keep locks it in rotation, snooze hides it for a bit, and
+              add routes it straight into the playlist you set below.
             </p>
             <p v-if="currentTrackMeta" class="track-id-hint">Track ID • {{ currentTrack }}</p>
             <p v-if="trackAddedAt" class="track-liked">Liked {{ trackAddedAt.relative }} · <span>{{ trackAddedAt.absolute }}</span></p>
@@ -558,22 +542,23 @@ async function handleEndSession() {
     <header class="swipe-header">
       <div>
         <span class="badge">Swipe Sessions</span>
-        <h2>Start a review session</h2>
+        <h2>Turn resurfacing into a game</h2>
         <p>
-          Load tracks from your library and decide what to keep, snooze, or add to a playlist.
+          Match your current vibe in minutes. Start a session, preview each resurfaced track, and decide whether to keep,
+          snooze, or route it into a fresh playlist.
         </p>
       </div>
       <form class="launch-form" @submit.prevent="startNewSession">
         <label>
           <span>User ID</span>
-          <input v-model="form.userId" type="text" placeholder="Enter your user ID" required />
+          <input v-model="form.userId" type="text" placeholder="Enter a user id" required />
         </label>
         <label>
-          <span>Number of tracks</span>
-          <input v-model.number="form.size" min="1" type="number" placeholder="How many tracks?" />
+          <span>Batch size</span>
+          <input v-model.number="form.size" min="1" type="number" />
         </label>
         <label class="queue-field">
-          <span>Manual track list (optional, one per line)</span>
+          <span>Queue tracks (one per line)</span>
           <textarea
             v-model="form.queueText"
             rows="4"
@@ -582,27 +567,31 @@ async function handleEndSession() {
         </label>
         <div class="likes-actions">
           <button type="button" :disabled="likesLoading || !form.userId.trim()" @click="loadLikedQueue">
-            <span v-if="likesLoading">Loading…</span>
+            <span v-if="likesLoading">Loading liked tracks…</span>
             <span v-else>Load from liked songs</span>
           </button>
           <p v-if="likesError" class="likes-status likes-status--error">{{ likesError }}</p>
           <p v-else-if="likesPulledCount !== null" class="likes-status">
-            Loaded {{ likesPulledCount }} tracks.
+            Loaded {{ likesPulledCount }} liked tracks
+            <template v-if="likesSource === 'offline-demo'"> from cached snapshot</template>
+            <template v-else> from backend</template>
+            into the queue.
           </p>
         </div>
         <div v-if="likesPreview.length" class="likes-preview">
-          <span>Preview:</span>
+          <span>First up from the cache:</span>
           <ul>
             <li v-for="label in likesPreview" :key="label">{{ label }}</li>
           </ul>
         </div>
         <div class="queue-summary">
-          <span v-if="queueCount">{{ queueCount }} tracks ready.</span>
-          <span v-else>No tracks loaded yet.</span>
+          <span v-if="queueCount">{{ queueCount }} tracks queued.</span>
+          <span v-else>No tracks queued yet.</span>
+          <span v-if="resolvedSizePreview">Session will request {{ resolvedSizePreview }} swipes.</span>
         </div>
         <button :disabled="starting" type="submit">
           <span v-if="starting">Starting…</span>
-          <span v-else>{{ sessionActive ? 'Restart' : 'Start session' }}</span>
+          <span v-else>{{ sessionActive ? 'Restart session' : 'Start swiping' }}</span>
         </button>
       </form>
     </header>
@@ -816,14 +805,6 @@ async function handleEndSession() {
   background: rgba(255, 85, 85, 0.12);
   border: 1px solid rgba(255, 85, 85, 0.35);
   color: #ffbaba;
-}
-
-.notice {
-  padding: 1rem 1.25rem;
-  border-radius: 12px;
-  background: rgba(29, 185, 84, 0.12);
-  border: 1px solid rgba(29, 185, 84, 0.35);
-  color: #a8f2c5;
 }
 
 .session-status {

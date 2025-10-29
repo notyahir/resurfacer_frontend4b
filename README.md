@@ -1,11 +1,20 @@
-# Resurfacer: Frontend - 4B
+# Resurfacer: Frontend
 
-Hello! Welcome to my assignment 4b, this is the frontend portion of Resurfacer and is in the works! Want to understand how a user could stumble upon our app and use it? Check out our user journey! Want to see how our system works? Check out the code!
-
-Curious to see where things are and how all these things work? Check out the table contents right below!
+Resurfacer helps you rediscover forgotten tracks in your Spotify library. This is the frontend portion of the application.
 
 ## Table Contents
-1. [User Journey](userjourney.md)
+
+1. [Visual Design Study](deliverables/Resurfacer%20-%20Visual%20Design%20Study%20-%20Yahir%20Hernandez.pdf)
+
+2. [User Journey Updated](deliverables/userjourney.md)
+
+3. [Video Updated](ResurfacerFrontendWalkthrough)
+
+4. [Changes in Backend Design Doc](https://github.com/notyahir/resurfacer_4a/new_changes.md)
+
+
+## Table Contents (Check-in)
+1. [User Journey](userjourney_checkpoint.md)
 
 2. [Video](ResurfacerFrontendWalkthroughCheckin.mkv)
 
@@ -14,10 +23,10 @@ Curious to see where things are and how all these things work? Check out the tab
 4. [Code Src](src/)
 
 5. [API spec](api-spec.md)
-## Outside of this Repo
+
+## Links
 
 1. [Main Repo](https://github.com/notyahir/61040-portfolio)
 
 2. [Backend Repo](https://github.com/notyahir/resurfacer_4a)
-
 

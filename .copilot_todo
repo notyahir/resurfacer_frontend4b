@@ -1,0 +1,4 @@
+[x] Update userjourney.md paragraph covering Swipe Sessions, Time-Capsule, Playlist Health
+[ ] Load updated library cache payload so tempo/energy/valence are populated for Time-Capsule & Playlist Health
+[ ] Wire Time-Capsule view to use synced backend data instead of static demo arrays
+[ ] Update Playlist Health view to read backend analysis results and display using real track metadata

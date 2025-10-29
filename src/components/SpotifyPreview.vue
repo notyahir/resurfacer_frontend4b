@@ -7,7 +7,7 @@
       height="180"
       frameborder="0"
       allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-      loading="lazy"
+      loading="eager"
     />
   </div>
 </template>

@@ -1,13 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, ref, onMounted, watch } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import SwipeSession from './components/SwipeSession.vue'
 import { API_BASE_URL, DEFAULT_API_ORIGIN } from './config'
-import {
-  analyzeSnapshot,
-  createSnapshot,
-  getReport,
-  type PlaylistFinding as PlaylistHealthFinding
-} from './services/playlistHealth'
 
 type Stage = 'connect' | 'hub' | 'swipe' | 'timecapsule' | 'playlist'
 
@@ -21,46 +15,6 @@ interface HeroContent {
   secondaryAction?: () => void
 }
 
-interface LibraryTrack {
-  trackId: string
-  title: string
-  artist: string
-  available: boolean
-  tempo: number | null
-  energy: number | null
-  valence: number | null
-}
-
-interface LibraryLikeEntry {
-  trackId: string
-  addedAt: number
-}
-
-interface LibrarySyncPayload {
-  userId: string
-  tracks: LibraryTrack[]
-  likes: LibraryLikeEntry[]
-  plays?: unknown[]
-  playlists?: unknown[]
-}
-
-interface TimeCapsuleRow {
-  trackId: string
-  title: string
-  artist: string
-  lastPlayed: string
-  staleness: number
-}
-
-type PlaylistIssueKind = 'Duplicate' | 'Unavailable' | 'Outlier'
-
-interface PlaylistIssue {
-  trackId: string
-  track: string
-  note: string
-  kind: PlaylistIssueKind
-}
-
 const stage = ref<Stage>('connect')
 const connected = ref(false)
 
@@ -68,126 +22,89 @@ const permissionOptions = reactive([
   {
     id: 'likes',
     label: 'Liked tracks',
-    description: 'Access your saved songs to rediscover forgotten favorites.'
+    description: 'Access your saved songs to find old favorites.'
   },
   {
     id: 'playlists',
     label: 'Playlists',
-    description: 'Check playlists for duplicates and unavailable tracks.'
+    description: 'View your playlists to find duplicates and issues.'
   },
   {
     id: 'history',
-    label: 'Recent plays',
-    description: 'Review listening history to identify tracks you haven\'t heard recently.'
+    label: 'Listening history',
+    description: 'Check what you\'ve been playing recently.'
   }
 ])
 
 const enabledPermissions = ref<string[]>(['likes', 'playlists'])
 
 const insights = [
-  { label: 'Tracks resurfaced this week', value: '132' },
-  { label: 'Playlists tuned', value: '8' },
-  { label: 'Stale tracks snoozed', value: '29' }
+  { label: 'Tracks reviewed this week', value: '132' },
+  { label: 'Playlists cleaned', value: '8' },
+  { label: 'Songs snoozed', value: '29' }
 ]
 
 const journeyCards = [
   {
     id: 'timecapsule',
     title: 'Time-Capsule',
-    description: 'Find tracks you haven\'t listened to in a while.',
-    detail: '8 tracks ready',
-    cta: 'Browse tracks',
+    description: 'Find songs you haven\'t listened to in a long time.',
+    detail: '8 tracks ready to review',
+    cta: 'Open Time-Capsule',
     stage: 'timecapsule' as Stage
   },
   {
     id: 'swipe',
     title: 'Swipe Sessions',
-    description: 'Review resurfaced tracks and decide what to keep.',
-    detail: 'Ready to start',
+    description: 'Quickly review your liked songs and organize them.',
+    detail: 'Review your music library',
     cta: 'Start session',
     stage: 'swipe' as Stage
   },
   {
     id: 'playlist',
-    title: 'Playlist Maintenance',
-    description: 'Clean up duplicates and replace unavailable tracks.',
-    detail: 'Scan your playlists',
-    cta: 'Check playlists',
+    title: 'Playlist Surgery',
+    description: 'Clean up a playlist by finding duplicates and broken tracks.',
+    detail: 'Analyze and fix issues',
+    cta: 'Analyze playlist',
     stage: 'playlist' as Stage
   }
 ]
 
-const TIME_CAPSULE_FALLBACK: TimeCapsuleRow[] = [
-  { trackId: 'fallback-1', title: 'Verano en la Ciudad', artist: 'Los Bandidos', lastPlayed: 'Summer 2018', staleness: 92 },
-  { trackId: 'fallback-2', title: 'Midnight Freeway', artist: 'Neon Reyes', lastPlayed: 'Nov 2019', staleness: 86 },
-  { trackId: 'fallback-3', title: 'Norteño Sunrise', artist: 'La Costa', lastPlayed: 'Apr 2017', staleness: 81 },
-  { trackId: 'fallback-4', title: 'Dos Mundos', artist: 'Orquesta Verde', lastPlayed: 'Jan 2016', staleness: 77 },
-  { trackId: 'fallback-5', title: 'Fuel the Drive', artist: 'Static Echoes', lastPlayed: 'Feb 2018', staleness: 74 },
-  { trackId: 'fallback-6', title: 'Nebula Skies', artist: 'Aurora Waves', lastPlayed: 'Sep 2015', staleness: 88 },
-  { trackId: 'fallback-7', title: 'Seafoam Vinyl', artist: 'Velvet Rooms', lastPlayed: 'Jul 2014', staleness: 84 },
-  { trackId: 'fallback-8', title: 'Coffee On 3rd', artist: 'Mima & The City', lastPlayed: 'Mar 2016', staleness: 79 }
+const timeCapsuleQueue = [
+  { title: 'Verano en la Ciudad', artist: 'Los Bandidos', lastPlayed: 'Summer 2018', staleness: 92 },
+  { title: 'Midnight Freeway', artist: 'Neon Reyes', lastPlayed: 'Nov 2019', staleness: 86 },
+  { title: 'Norteño Sunrise', artist: 'La Costa', lastPlayed: 'Apr 2017', staleness: 81 },
+  { title: 'Dos Mundos', artist: 'Orquesta Verde', lastPlayed: 'Jan 2016', staleness: 77 },
+  { title: 'Fuel the Drive', artist: 'Static Echoes', lastPlayed: 'Feb 2018', staleness: 74 },
+  { title: 'Nebula Skies', artist: 'Aurora Waves', lastPlayed: 'Sep 2015', staleness: 88 },
+  { title: 'Seafoam Vinyl', artist: 'Velvet Rooms', lastPlayed: 'Jul 2014', staleness: 84 },
+  { title: 'Coffee On 3rd', artist: 'Mima & The City', lastPlayed: 'Mar 2016', staleness: 79 }
 ]
 
-const PLAYLIST_FINDINGS_FALLBACK = {
+const playlistFindings = {
   duplicates: [
-    {
-      trackId: 'fallback-dup-1',
-      track: 'On the Road Again',
-      note: 'Appears twice — keep the remastered take.',
-      kind: 'Duplicate' as PlaylistIssueKind
-    },
-    {
-      trackId: 'fallback-dup-2',
-      track: 'Corazón de México',
-      note: 'Duplicate across Focus Flow and Morning Revival.',
-      kind: 'Duplicate' as PlaylistIssueKind
-    }
+    { track: 'On the Road Again', note: 'This song appears twice in your playlist.' },
+    { track: 'Corazón de México', note: 'Appears in multiple playlists.' }
   ],
   unavailable: [
-    {
-      trackId: 'fallback-unavail-1',
-      track: 'Desert Skies',
-      note: 'No longer streaming — swap for the live version.',
-      kind: 'Unavailable' as PlaylistIssueKind
-    }
+    { track: 'Desert Skies', note: 'This track is no longer available on Spotify.' }
   ],
   outliers: [
-    {
-      trackId: 'fallback-outlier-1',
-      track: 'Throat Singing 101',
-      note: 'Energy mismatch for an upbeat set.',
-      kind: 'Outlier' as PlaylistIssueKind
-    },
-    {
-      trackId: 'fallback-outlier-2',
-      track: 'Rainy Day Lo-Fi',
-      note: 'Mood mismatch — tag for later review.',
-      kind: 'Outlier' as PlaylistIssueKind
-    }
+    { track: 'Throat Singing 101', note: 'Doesn\'t match the energy of other songs.' },
+    { track: 'Rainy Day Lo-Fi', note: 'Doesn\'t match the mood of this playlist.' }
   ]
 }
 
-const timeCapsuleQueue = ref<TimeCapsuleRow[]>([...TIME_CAPSULE_FALLBACK])
-
-const playlistFindings = reactive({
-  duplicates: [...PLAYLIST_FINDINGS_FALLBACK.duplicates] as PlaylistIssue[],
-  unavailable: [...PLAYLIST_FINDINGS_FALLBACK.unavailable] as PlaylistIssue[],
-  outliers: [...PLAYLIST_FINDINGS_FALLBACK.outliers] as PlaylistIssue[]
-})
-
-const playlistStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
-const playlistError = ref<string | null>(null)
-let libraryTrackLookup: Map<string, LibraryTrack> = new Map()
-
 const storyMoments = [
-  { time: '08:00', label: 'Connect', description: 'Link your Spotify account to get started.' },
-  { time: '08:05', label: 'Browse', description: 'Explore tracks you haven\'t heard in a while.' },
-  { time: '08:15', label: 'Decide', description: 'Keep, snooze, or add tracks to a playlist.' },
-  { time: '08:35', label: 'Maintain', description: 'Clean up duplicates and broken links.' },
-  { time: '08:50', label: 'Enjoy', description: 'Listen to your refreshed playlists.' }
+  { time: '08:00', label: 'Connect', description: 'Link your Spotify account.' },
+  { time: '08:05', label: 'Choose', description: 'Pick what you want to do.' },
+  { time: '08:15', label: 'Review', description: 'Go through your music.' },
+  { time: '08:35', label: 'Organize', description: 'Clean up playlists or add songs.' },
+  { time: '08:50', label: 'Done', description: 'Your music library is refreshed.' }
 ]
 
-const swipeQueue = ref<string[]>(TIME_CAPSULE_FALLBACK.slice(0, 3).map((track) => track.trackId))
+const swipeQueue = ref<string[]>(['track-001', 'track-002', 'track-003'])
 
 const isFlowStage = computed(() => ['swipe', 'timecapsule', 'playlist'].includes(stage.value))
 
@@ -248,268 +165,15 @@ function ensureConnection(target?: Stage) {
   return true
 }
 
-const LIBRARY_PAYLOAD_URL = new URL('./data/library_sync_payload.json', import.meta.url)
-const MS_PER_DAY = 86_400_000
-const YEARS_FOR_MAX_STALENESS = 5
-let cachedLibraryPayload: LibrarySyncPayload | null = null
-
-onMounted(() => {
-  hydrateFromLibraryPayload().catch((error) => {
-    console.warn('Initial library hydration failed', error)
-  })
-})
-
-watch(
-  () => connected.value,
-  (isConnected) => {
-    if (isConnected && cachedLibraryPayload) {
-      refreshPlaylistHealth(cachedLibraryPayload).catch((error) => {
-        console.warn('Playlist health refresh failed after connecting', error)
-      })
-    }
-  }
-)
-
-async function hydrateFromLibraryPayload() {
-  try {
-    const response = await fetch(LIBRARY_PAYLOAD_URL)
-
-    if (!response.ok) {
-      throw new Error(`Library payload request failed: ${response.status}`)
-    }
-
-    const payload = (await response.json()) as LibrarySyncPayload
-    cachedLibraryPayload = payload
-    libraryTrackLookup = new Map(payload.tracks.map((track) => [track.trackId, track]))
-
-    buildTimeCapsuleFromPayload(payload)
-
-    if (connected.value) {
-      await refreshPlaylistHealth(payload)
-    } else {
-      playlistStatus.value = 'idle'
-    }
-  } catch (error) {
-    applyTimeCapsuleFallback()
-    applyPlaylistFallback('Unable to load playlist data yet. Connect and refresh to try again.')
-    throw error
-  }
-}
-
-function buildTimeCapsuleFromPayload(payload: LibrarySyncPayload) {
-  if (!payload.likes?.length) {
-    timeCapsuleQueue.value = []
-    return
-  }
-
-  const now = Date.now()
-  const dedupedLikes = dedupeLikesByTrack(payload.likes)
-  const oldestLikesFirst = [...dedupedLikes].sort((a, b) => a.addedAt - b.addedAt)
-  const selectedLikes = oldestLikesFirst.slice(0, 40)
-
-  const queue = selectedLikes
-    .map((entry) => {
-      const track = libraryTrackLookup.get(entry.trackId)
-      const addedMs = entry.addedAt * 1000
-
-      return {
-        trackId: entry.trackId,
-        title: track?.title ?? entry.trackId,
-        artist: track?.artist ?? 'Unknown artist',
-        lastPlayed: formatLibraryTimestamp(addedMs, now),
-        staleness: computeStalenessScore(addedMs, now)
-      }
-    })
-    .filter((row) => row !== undefined)
-    .sort((a, b) => b.staleness - a.staleness)
-
-  timeCapsuleQueue.value = queue
-}
-
-async function refreshPlaylistHealth(payload: LibrarySyncPayload) {
-  if (!payload.likes?.length) {
-    playlistFindings.duplicates = []
-    playlistFindings.unavailable = []
-    playlistFindings.outliers = []
-    playlistStatus.value = 'ready'
-    playlistError.value = null
-    return
-  }
-
-  playlistStatus.value = 'loading'
-  playlistError.value = null
-
-  try {
-    const trackIds = dedupeTrackIds(payload.likes, 100)
-    if (!trackIds.length) {
-      playlistFindings.duplicates = []
-      playlistFindings.unavailable = []
-      playlistFindings.outliers = []
-      playlistStatus.value = 'ready'
-      return
-    }
-
-    const playlistId = `liked:${payload.userId ?? 'library'}`
-    const { snapshotId } = await createSnapshot({
-      playlistId,
-      userId: payload.userId ?? 'unknown-user',
-      trackIds
-    })
-    const { reportId } = await analyzeSnapshot({
-      playlistId,
-      snapshotId
-    })
-    const report = await getReport({ reportId })
-    const grouped = groupFindings(report.findings)
-
-    playlistFindings.duplicates = grouped.duplicates
-    playlistFindings.unavailable = grouped.unavailable
-    playlistFindings.outliers = grouped.outliers
-    playlistStatus.value = 'ready'
-  } catch (error) {
-    applyPlaylistFallback('Unable to reach playlist health service. Showing sample issues instead.')
-    throw error
-  }
-}
-
-function dedupeLikesByTrack(likes: LibraryLikeEntry[]) {
-  const seen = new Map<string, LibraryLikeEntry>()
-
-  for (const entry of likes) {
-    const existing = seen.get(entry.trackId)
-    if (!existing || entry.addedAt < existing.addedAt) {
-      seen.set(entry.trackId, entry)
-    }
-  }
-
-  return Array.from(seen.values())
-}
-
-function dedupeTrackIds(likes: LibraryLikeEntry[], limit: number) {
-  const seen = new Set<string>()
-  const sorted = [...likes].sort((a, b) => b.addedAt - a.addedAt)
-  const result: string[] = []
-
-  for (const entry of sorted) {
-    if (seen.has(entry.trackId)) continue
-    seen.add(entry.trackId)
-    result.push(entry.trackId)
-    if (result.length >= limit) break
-  }
-
-  return result
-}
-
-function groupFindings(findings: PlaylistHealthFinding[]) {
-  const buckets = {
-    duplicates: [] as PlaylistIssue[],
-    unavailable: [] as PlaylistIssue[],
-    outliers: [] as PlaylistIssue[]
-  }
-
-  for (const finding of findings) {
-    const issue = createPlaylistIssue(finding)
-
-    switch (finding.kind) {
-      case 'Duplicate':
-        buckets.duplicates.push(issue)
-        break
-      case 'Unavailable':
-        buckets.unavailable.push(issue)
-        break
-      case 'Outlier':
-      default:
-        buckets.outliers.push(issue)
-        break
-    }
-  }
-
-  return buckets
-}
-
-function createPlaylistIssue(finding: PlaylistHealthFinding): PlaylistIssue {
-  return {
-    trackId: finding.trackId,
-    track: formatTrackLabel(finding.trackId),
-    note: noteForKind(finding.kind, finding.idx),
-    kind: finding.kind
-  }
-}
-
-function formatTrackLabel(trackId: string) {
-  const track = libraryTrackLookup.get(trackId)
-
-  if (!track) {
-    return trackId
-  }
-
-  return `${track.title} — ${track.artist}`
-}
-
-function noteForKind(kind: PlaylistIssueKind, idx?: number) {
-  switch (kind) {
-    case 'Duplicate':
-      return idx != null
-        ? `Appears multiple times (slot ${idx + 1}).`
-        : 'Appears multiple times in this playlist.'
-    case 'Unavailable':
-      return 'Track is no longer available — swap it out.'
-    case 'Outlier':
-    default:
-      return 'Energy or mood mismatch compared to the rest of the playlist.'
-  }
-}
-
-function computeStalenessScore(playedAtMs: number, nowMs: number) {
-  const diff = Math.max(0, nowMs - playedAtMs)
-  const daysSince = diff / MS_PER_DAY
-  const yearsSince = daysSince / 365
-  const normalized = Math.min(1, yearsSince / YEARS_FOR_MAX_STALENESS)
-
-  return Math.round(normalized * 100)
-}
-
-function formatLibraryTimestamp(timestampMs: number, nowMs: number) {
-  if (timestampMs > nowMs) {
-    return 'Just added'
-  }
-
-  return formatMonthYear(timestampMs)
-}
-
-function formatMonthYear(timestampMs: number) {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      year: 'numeric'
-    }).format(timestampMs)
-  } catch (error) {
-    console.warn('Unable to format timestamp', timestampMs, error)
-    return 'Unknown'
-  }
-}
-
-function applyTimeCapsuleFallback() {
-  timeCapsuleQueue.value = [...TIME_CAPSULE_FALLBACK]
-}
-
-function applyPlaylistFallback(message?: string) {
-  playlistFindings.duplicates = [...PLAYLIST_FINDINGS_FALLBACK.duplicates]
-  playlistFindings.unavailable = [...PLAYLIST_FINDINGS_FALLBACK.unavailable]
-  playlistFindings.outliers = [...PLAYLIST_FINDINGS_FALLBACK.outliers]
-  playlistStatus.value = message ? 'error' : 'ready'
-  playlistError.value = message ?? null
-}
-
 const heroContent = computed<HeroContent>(() => {
   switch (stage.value) {
     case 'connect':
       if (connected.value) {
         return {
           badge: 'Setup',
-          title: 'Spotify account connected',
+          title: 'Your account is connected',
           copy:
-            'Your account is linked. You can update permissions below or disconnect anytime.',
+            'You can now use all features. Adjust permissions below or disconnect if needed.',
           primaryLabel: 'Continue',
           primaryAction: goHome,
           secondaryLabel: 'Disconnect',
@@ -521,16 +185,16 @@ const heroContent = computed<HeroContent>(() => {
         badge: 'Setup',
         title: 'Connect your Spotify account',
         copy:
-          'Link Spotify to start rediscovering your music. You control what data we can access.',
+          'Choose what data Resurfacer can access. You stay in control of your privacy while getting personalized recommendations.',
         primaryLabel: 'Connect account',
         primaryAction: connectAccount
       }
     case 'hub':
       return {
-        badge: 'Home',
+        badge: "What's next",
         title: 'What would you like to do?',
         copy:
-          'Choose an option below to rediscover old tracks, review your library, or clean up playlists.',
+          'Rediscover forgotten songs, review and organize tracks, or clean up your playlists.',
         primaryLabel: 'Start Swipe Session',
         primaryAction: () => goToStage('swipe'),
         secondaryLabel: 'Browse Time-Capsule',
@@ -539,10 +203,10 @@ const heroContent = computed<HeroContent>(() => {
     case 'swipe':
       return {
         badge: 'Swipe Sessions',
-        title: 'Review your tracks',
+        title: 'Review your music',
         copy:
-          'Go through resurfaced tracks and decide what to keep, snooze, or add to a playlist.',
-        primaryLabel: 'Back to home',
+          'Go through your liked songs and decide what to keep, snooze for later, or add to a playlist.',
+        primaryLabel: 'Back',
         primaryAction: goHome
       }
     case 'timecapsule':
@@ -550,17 +214,17 @@ const heroContent = computed<HeroContent>(() => {
         badge: 'Time-Capsule',
         title: 'Rediscover old favorites',
         copy:
-          'Browse tracks you haven\'t listened to recently and decide what to do with them.',
-        primaryLabel: 'Back to home',
+          'Find songs you haven\'t listened to in a while. Review how long it\'s been and add them back to your rotation.',
+        primaryLabel: 'Back',
         primaryAction: goHome
       }
     case 'playlist':
       return {
-        badge: 'Playlist Maintenance',
-        title: 'Clean up your playlists',
+        badge: 'Playlist Surgery',
+        title: 'Clean up your playlist',
         copy:
-          'Find and fix duplicates, unavailable tracks, and other issues in your playlists.',
-        primaryLabel: 'Back to home',
+          'Find and fix duplicates, unavailable tracks, and songs that don\'t fit the mood.',
+        primaryLabel: 'Back',
         primaryAction: goHome
       }
     default:
@@ -575,8 +239,7 @@ const heroContent = computed<HeroContent>(() => {
 })
 
 const timeCapsuleStats = computed(() => {
-  const queue = timeCapsuleQueue.value
-  const total = queue.length
+  const total = timeCapsuleQueue.length
 
   if (!total) {
     return {
@@ -588,11 +251,11 @@ const timeCapsuleStats = computed(() => {
     }
   }
 
-  const stalenessValues = queue.map((item) => item.staleness)
+  const stalenessValues = timeCapsuleQueue.map((item) => item.staleness)
   const averageStaleness = Math.round(stalenessValues.reduce((sum, value) => sum + value, 0) / total)
-  const highStalenessCount = queue.filter((item) => item.staleness >= 75).length
-  const spotlightTrack = [...queue].sort((a, b) => b.staleness - a.staleness)[0] ?? null
-  const uniqueArtists = new Set(queue.map((item) => item.artist)).size
+  const highStalenessCount = timeCapsuleQueue.filter((item) => item.staleness >= 85).length
+  const spotlightTrack = [...timeCapsuleQueue].sort((a, b) => b.staleness - a.staleness)[0] ?? null
+  const uniqueArtists = new Set(timeCapsuleQueue.map((item) => item.artist)).size
 
   return {
     queueSize: total,
@@ -706,20 +369,20 @@ const apiBaseDisplay = computed(() => {
         <div class="connect-grid-top">
           <article class="connect-prep">
             <h3>Getting started</h3>
-            <p>Follow these steps to begin:</p>
+            <p>Here's what you need to do:</p>
             <ul>
-              <li>Connect your Spotify account.</li>
-              <li>Choose which data you want to share.</li>
-              <li>Start exploring your music library.</li>
+              <li>Connect your Spotify account with the permissions you choose.</li>
+              <li>Your liked tracks will be analyzed to find old favorites.</li>
+              <li>Playlists can be scanned for duplicates and other issues.</li>
             </ul>
           </article>
         </div>
 
         <div class="connect-main-grid">
           <div class="connect-permissions">
-            <h2>Select permissions</h2>
+            <h2>Choose permissions</h2>
             <p>
-              Choose what data Resurfacer can access from your Spotify account.
+              Select what data Resurfacer can access from your Spotify account.
             </p>
             <div class="permission-list">
               <button
@@ -745,7 +408,7 @@ const apiBaseDisplay = computed(() => {
           <section class="story-panel story-panel--connect">
             <header>
               <h2>How it works</h2>
-              <p>A typical session with Resurfacer.</p>
+              <p>A typical session from start to finish.</p>
             </header>
             <ul>
               <li v-for="moment in storyMoments" :key="moment.time">
@@ -779,25 +442,25 @@ const apiBaseDisplay = computed(() => {
         </section>
 
         <section class="ai-preview">
-          <div class="ai-preview__header">
+                    <div class="ai-preview__header">
             <span class="ai-preview__badge">Coming soon</span>
-            <h2>Smart Suggestions</h2>
+            <h2>AI Assistant</h2>
             <p>
-              We're building features to help you discover patterns and maintain your library more easily.
+              We're building an AI assistant to help you manage your music library automatically.
             </p>
           </div>
           <ul class="ai-preview__list">
             <li>
-              <strong>Listening insights</strong>
-              <p>See what's changed in your listening habits over time.</p>
+              <strong>Smart suggestions</strong>
+              <p>Get recommendations based on your listening habits.</p>
             </li>
             <li>
-              <strong>Playlist health checks</strong>
-              <p>Identify duplicates, unavailable tracks, and inconsistencies.</p>
+              <strong>Playlist health check</strong>
+              <p>Automatically find duplicates and broken tracks.</p>
             </li>
             <li>
-              <strong>Personalized recommendations</strong>
-              <p>Get suggestions based on your listening preferences.</p>
+              <strong>Personalized actions</strong>
+              <p>Let AI suggest what to do with your music.</p>
             </li>
           </ul>
         </section>
@@ -805,14 +468,14 @@ const apiBaseDisplay = computed(() => {
 
       <template v-else-if="stage === 'swipe'">
         <section class="flow-plan">
-          <h2>How it works</h2>
+          <h2>How this works</h2>
           <p>
-            Review tracks from your library one at a time. Keep what you like, snooze tracks to review later, or add them to a playlist.
+            Review songs from your liked tracks. Keep what you want to hear more, snooze songs you're not in the mood for, or add tracks to a specific playlist.
           </p>
           <ul>
-            <li>Load tracks from your liked songs.</li>
-            <li>Decide what to do with each track.</li>
-            <li>Set how many tracks you want to review.</li>
+            <li>Each session loads songs you haven't reviewed yet.</li>
+            <li>You control how many tracks to review per session.</li>
+            <li>Snoozed songs won't appear again for a while.</li>
           </ul>
         </section>
         <SwipeSession class="flow-session" :seed-tracks="swipeQueue" @update:seedTracks="setSwipeQueue" />
@@ -823,7 +486,7 @@ const apiBaseDisplay = computed(() => {
           <div class="timecapsule-header">
             <h2>Your old favorites</h2>
             <p>
-              Tracks you haven't listened to recently, sorted by how long it's been since you last played them.
+              These are songs you haven't listened to recently. Review the list and add any you'd like to hear again to your next Swipe Session.
             </p>
           </div>
 
@@ -831,12 +494,12 @@ const apiBaseDisplay = computed(() => {
             <article class="timecapsule-stat">
               <span class="timecapsule-stat__label">Total tracks</span>
               <strong class="timecapsule-stat__value">{{ timeCapsuleStats.queueSize }}</strong>
-              <p>Tracks ready to rediscover.</p>
+              <p>Songs you haven't heard recently.</p>
             </article>
             <article class="timecapsule-stat">
-              <span class="timecapsule-stat__label">Haven't heard</span>
+              <span class="timecapsule-stat__label">Average time</span>
               <strong class="timecapsule-stat__value">{{ timeCapsuleStats.averageStaleness }}%</strong>
-              <p>{{ timeCapsuleStats.highStalenessCount }} tracks haven't been played in a long time.</p>
+              <p>{{ timeCapsuleStats.highStalenessCount }} haven't been played in a long time.</p>
             </article>
             <article class="timecapsule-stat">
               <span class="timecapsule-stat__label">Artists</span>
@@ -850,8 +513,8 @@ const apiBaseDisplay = computed(() => {
           <div class="timecapsule-body">
             <div class="timecapsule-table-wrap">
               <header class="timecapsule-table__header">
-                <h3>Tracks</h3>
-                <p>Add any track to your Swipe Session queue to review it.</p>
+                <h3>All tracks</h3>
+                <p>Add a track to your next Swipe Session to review it.</p>
               </header>
               <table class="timecapsule-table">
                 <thead>
@@ -859,31 +522,24 @@ const apiBaseDisplay = computed(() => {
                     <th>Track</th>
                     <th>Artist</th>
                     <th>Last played</th>
-                    <th>Staleness</th>
+                    <th>Score</th>
                     <th />
                   </tr>
                 </thead>
-                <tbody v-if="timeCapsuleQueue.length">
-                  <tr v-for="row in timeCapsuleQueue" :key="row.trackId">
+                <tbody>
+                  <tr v-for="row in timeCapsuleQueue" :key="row.title">
                     <td>{{ row.title }}</td>
                     <td>{{ row.artist }}</td>
                     <td>{{ row.lastPlayed }}</td>
-                    <td><span class="pill">{{ row.staleness }}%</span></td>
+                    <td><span class="pill">{{ row.staleness }}</span></td>
                     <td>
                       <button
                         type="button"
-                        :disabled="swipeQueue.includes(row.trackId)"
-                        @click="queueTrackForSwipe(row.trackId)"
+                        :disabled="swipeQueue.includes(row.title)"
+                        @click="queueTrackForSwipe(row.title)"
                       >
-                        {{ swipeQueue.includes(row.trackId) ? 'Added' : 'Add to queue' }}
+                        {{ swipeQueue.includes(row.title) ? 'Added' : 'Add to session' }}
                       </button>
-                    </td>
-                  </tr>
-                </tbody>
-                <tbody v-else>
-                  <tr>
-                    <td class="timecapsule-empty" colspan="5">
-                      No eligible tracks found yet. Try syncing your library again.
                     </td>
                   </tr>
                 </tbody>
@@ -892,27 +548,27 @@ const apiBaseDisplay = computed(() => {
 
             <aside class="timecapsule-sidebar">
               <div v-if="timeCapsuleStats.spotlightTrack" class="timecapsule-spotlight">
-                <span class="timecapsule-spotlight__badge">Spotlight</span>
+                <span class="timecapsule-spotlight__badge">Featured</span>
                 <h3>{{ timeCapsuleStats.spotlightTrack.title }}</h3>
                 <p>{{ timeCapsuleStats.spotlightTrack.artist }} · Last played {{ timeCapsuleStats.spotlightTrack.lastPlayed }}</p>
                 <p>
-                  This track hasn't been played in a while. Add it to your queue to review.
+                  This song has a score of {{ timeCapsuleStats.spotlightTrack.staleness }}—you haven't listened to it in a while. Add it to your next session to decide if you want to hear it again.
                 </p>
                 <button
                   type="button"
-                  :disabled="swipeQueue.includes(timeCapsuleStats.spotlightTrack.trackId)"
-                  @click="queueTrackForSwipe(timeCapsuleStats.spotlightTrack.trackId)"
+                  :disabled="swipeQueue.includes(timeCapsuleStats.spotlightTrack.title)"
+                  @click="queueTrackForSwipe(timeCapsuleStats.spotlightTrack.title)"
                 >
-                  {{ swipeQueue.includes(timeCapsuleStats.spotlightTrack.trackId) ? 'Added' : 'Add to queue' }}
+                  {{ swipeQueue.includes(timeCapsuleStats.spotlightTrack.title) ? 'Already added' : 'Add to session' }}
                 </button>
               </div>
 
                             <div class="timecapsule-guidance">
-                <h3>What to do next</h3>
+                <h3>What you can do</h3>
                 <ul>
-                  <li>Add tracks to your Swipe Session queue to review them.</li>
-                  <li>Create a new playlist with your rediscovered favorites.</li>
-                  <li>Come back anytime to find more old tracks.</li>
+                  <li>Add songs you want to hear again to your next Swipe Session.</li>
+                  <li>Create a new playlist with your old favorites.</li>
+                  <li>Come back later to see more songs from your past.</li>
                 </ul>
               </div>
             </aside>
@@ -922,20 +578,13 @@ const apiBaseDisplay = computed(() => {
 
       <template v-else-if="stage === 'playlist'">
         <section class="playlist-report">
-          <h2>Playlist issues</h2>
-          <p>Review and fix any problems found in your playlists.</p>
-          <p v-if="playlistStatus === 'loading'" class="playlist-status">Scanning playlists…</p>
-          <p v-else-if="playlistStatus === 'error' && playlistError" class="playlist-status playlist-status--error">
-            {{ playlistError }}
-          </p>
+          <h2>Playlist analysis</h2>
+          <p>Here are the issues found in your playlist.</p>
           <div class="report-columns">
             <div>
               <h3>Duplicates</h3>
               <ul>
-                <li v-if="!playlistFindings.duplicates.length" class="playlist-empty">
-                  No duplicates detected.
-                </li>
-                <li v-for="item in playlistFindings.duplicates" :key="item.trackId">
+                <li v-for="item in playlistFindings.duplicates" :key="item.track">
                   <strong>{{ item.track }}</strong>
                   <p>{{ item.note }}</p>
                   <button type="button">Remove duplicate</button>
@@ -945,10 +594,7 @@ const apiBaseDisplay = computed(() => {
             <div>
               <h3>Unavailable</h3>
               <ul>
-                <li v-if="!playlistFindings.unavailable.length" class="playlist-empty">
-                  All tracks are currently playable.
-                </li>
-                <li v-for="item in playlistFindings.unavailable" :key="item.trackId">
+                <li v-for="item in playlistFindings.unavailable" :key="item.track">
                   <strong>{{ item.track }}</strong>
                   <p>{{ item.note }}</p>
                   <button type="button">Swap source</button>
@@ -958,10 +604,7 @@ const apiBaseDisplay = computed(() => {
             <div>
               <h3>Mood outliers</h3>
               <ul>
-                <li v-if="!playlistFindings.outliers.length" class="playlist-empty">
-                  No energy mismatches found.
-                </li>
-                <li v-for="item in playlistFindings.outliers" :key="item.trackId">
+                <li v-for="item in playlistFindings.outliers" :key="item.track">
                   <strong>{{ item.track }}</strong>
                   <p>{{ item.note }}</p>
                   <button type="button">Tag for review</button>
@@ -1662,13 +1305,6 @@ const apiBaseDisplay = computed(() => {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.timecapsule-empty {
-  padding: 1.5rem 0;
-  text-align: center;
-  color: rgba(255, 255, 255, 0.45);
-  font-style: italic;
-}
-
 .timecapsule-table button {
   padding: 0.4rem 1rem;
   border-radius: 999px;
@@ -1776,16 +1412,6 @@ const apiBaseDisplay = computed(() => {
   margin-top: 0;
 }
 
-.playlist-status {
-  margin: 0.25rem 0 1.25rem;
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 0.9rem;
-}
-
-.playlist-status--error {
-  color: var(--spotify-red, #ef476f);
-}
-
 .report-columns {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1807,12 +1433,6 @@ const apiBaseDisplay = computed(() => {
   border-radius: 16px;
   background: rgba(24, 24, 24, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-.playlist-empty {
-  padding: 0.75rem 0;
-  color: rgba(255, 255, 255, 0.45);
-  font-style: italic;
 }
 
 .report-columns p {
