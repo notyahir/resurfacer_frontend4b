@@ -2,11 +2,34 @@
 import { computed, reactive, ref, onMounted, watch } from 'vue'
 import SwipeSession from './components/SwipeSession.vue'
 import { API_BASE_URL, DEFAULT_API_ORIGIN } from './config'
+import { loadTimeCapsuleTracks, type TimeCapsuleTrack, type TimeCapsuleSource } from './services/timeCapsule'
 import {
-  analyzeSnapshot,
+  getLikedTracks,
+  getTracks,
+  loadDemoSnapshot,
+  syncLibrary,
+  type LikedTracksSource,
+  type TrackMetadata
+} from './services/libraryCache'
+import {
+  ensureLink,
+  startAuth,
+  completeAuth,
+  listLinks,
+  revokeLink,
+  syncLibraryFromSpotify,
+  type LinkHandle
+} from './services/platformLink'
+import {
+  ingestFromLibrary as ingestTrackScoringFromLibrary,
+  type BootstrapResult
+} from './services/trackScoring'
+import {
   createSnapshot,
+  analyzeSnapshot,
   getReport,
-  type PlaylistFinding as PlaylistHealthFinding
+  type PlaylistFinding,
+  type PlaylistIssueKind
 } from './services/playlistHealth'
 
 type Stage = 'connect' | 'hub' | 'swipe' | 'timecapsule' | 'playlist'
@@ -21,38 +44,11 @@ interface HeroContent {
   secondaryAction?: () => void
 }
 
-interface LibraryTrack {
-  trackId: string
-  title: string
-  artist: string
-  available: boolean
-  tempo: number | null
-  energy: number | null
-  valence: number | null
+interface TimeCapsuleSourceMetaState {
+  label: string
+  detail: string
+  variant: 'success' | 'accent' | 'neutral' | 'warning' | 'muted'
 }
-
-interface LibraryLikeEntry {
-  trackId: string
-  addedAt: number
-}
-
-interface LibrarySyncPayload {
-  userId: string
-  tracks: LibraryTrack[]
-  likes: LibraryLikeEntry[]
-  plays?: unknown[]
-  playlists?: unknown[]
-}
-
-interface TimeCapsuleRow {
-  trackId: string
-  title: string
-  artist: string
-  lastPlayed: string
-  staleness: number
-}
-
-type PlaylistIssueKind = 'Duplicate' | 'Unavailable' | 'Outlier'
 
 interface PlaylistIssue {
   trackId: string
@@ -63,6 +59,15 @@ interface PlaylistIssue {
 
 const stage = ref<Stage>('connect')
 const connected = ref(false)
+const connectLoading = ref(false)
+const connectError = ref<string | null>(null)
+const librarySyncing = ref(false)
+const librarySyncError = ref<string | null>(null)
+const lastSyncSummary = ref<string | null>(null)
+
+const likedTracksSource = ref<LikedTracksSource | 'unknown'>('unknown')
+const likedTracksLoading = ref(false)
+const likedTracksError = ref<string | null>(null)
 
 const permissionOptions = reactive([
   {
@@ -117,67 +122,172 @@ const journeyCards = [
   }
 ]
 
-const TIME_CAPSULE_FALLBACK: TimeCapsuleRow[] = [
-  { trackId: 'fallback-1', title: 'Verano en la Ciudad', artist: 'Los Bandidos', lastPlayed: 'Summer 2018', staleness: 92 },
-  { trackId: 'fallback-2', title: 'Midnight Freeway', artist: 'Neon Reyes', lastPlayed: 'Nov 2019', staleness: 86 },
-  { trackId: 'fallback-3', title: 'Norteño Sunrise', artist: 'La Costa', lastPlayed: 'Apr 2017', staleness: 81 },
-  { trackId: 'fallback-4', title: 'Dos Mundos', artist: 'Orquesta Verde', lastPlayed: 'Jan 2016', staleness: 77 },
-  { trackId: 'fallback-5', title: 'Fuel the Drive', artist: 'Static Echoes', lastPlayed: 'Feb 2018', staleness: 74 },
-  { trackId: 'fallback-6', title: 'Nebula Skies', artist: 'Aurora Waves', lastPlayed: 'Sep 2015', staleness: 88 },
-  { trackId: 'fallback-7', title: 'Seafoam Vinyl', artist: 'Velvet Rooms', lastPlayed: 'Jul 2014', staleness: 84 },
-  { trackId: 'fallback-8', title: 'Coffee On 3rd', artist: 'Mima & The City', lastPlayed: 'Mar 2016', staleness: 79 }
-]
+const timeCapsuleQueue = ref<TimeCapsuleTrack[]>([])
+const timeCapsuleLoading = ref(false)
+const timeCapsuleError = ref<string | null>(null)
+const timeCapsuleSource = ref<TimeCapsuleSource>('snapshot')
 
-const PLAYLIST_FINDINGS_FALLBACK = {
+const ACTIVE_USER_ID = 'demo-user'
+const OAUTH_STATE_STORAGE_KEY = 'resurfacer:spotifyAuthState'
+const PERMISSIONS_STORAGE_KEY = 'resurfacer:enabledPermissions'
+const SPOTIFY_SCOPES = [
+	'user-library-read',
+	'user-top-read',
+	'user-read-recently-played',
+	'playlist-read-private',
+	'playlist-read-collaborative'
+  ]
+  const SPOTIFY_REDIRECT_PATH = '/callback'
+  const SPOTIFY_REDIRECT_HOST = '127.0.0.1:5173'
+  const currentLink = ref<LinkHandle | null>(null)
+const playlistFindings = reactive({
+	duplicates: [] as PlaylistIssue[],
+	unavailable: [] as PlaylistIssue[],
+	outliers: [] as PlaylistIssue[]
+})
+const playlistStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
+const playlistError = ref<string | null>(null)
+const playlistSource = ref<'unknown' | 'api' | 'demo'>('unknown')
+
+const likedTrackIds = ref<string[]>([])
+
+const PLAYLIST_FALLBACK_ISSUES: Readonly<{ duplicates: PlaylistIssue[]; unavailable: PlaylistIssue[]; outliers: PlaylistIssue[] }> = Object.freeze({
   duplicates: [
     {
-      trackId: 'fallback-dup-1',
-      track: 'On the Road Again',
-      note: 'Appears twice — keep the remastered take.',
-      kind: 'Duplicate' as PlaylistIssueKind
+      trackId: 'demo:duplicate:1',
+      track: 'On the Road Again — Willie Nelson',
+      note: 'Appears twice in this playlist. Remove the duplicate entry.',
+      kind: 'Duplicate'
     },
     {
-      trackId: 'fallback-dup-2',
-      track: 'Corazón de México',
-      note: 'Duplicate across Focus Flow and Morning Revival.',
-      kind: 'Duplicate' as PlaylistIssueKind
+      trackId: 'demo:duplicate:2',
+      track: 'Corazón de México — Luna Norte',
+      note: 'Duplicate across multiple playlists. Keep a single copy.',
+      kind: 'Duplicate'
     }
   ],
   unavailable: [
     {
-      trackId: 'fallback-unavail-1',
-      track: 'Desert Skies',
-      note: 'No longer streaming — swap for the live version.',
-      kind: 'Unavailable' as PlaylistIssueKind
+      trackId: 'demo:unavailable:1',
+      track: 'Desert Skies — Monte Vista',
+      note: 'No longer streaming. Swap for an available version.',
+      kind: 'Unavailable'
     }
   ],
   outliers: [
     {
-      trackId: 'fallback-outlier-1',
-      track: 'Throat Singing 101',
-      note: 'Energy mismatch for an upbeat set.',
-      kind: 'Outlier' as PlaylistIssueKind
+      trackId: 'demo:outlier:1',
+      track: 'Throat Singing 101 — Resonance Collective',
+      note: 'Energy mismatch compared to the rest of this playlist.',
+      kind: 'Outlier'
     },
     {
-      trackId: 'fallback-outlier-2',
-      track: 'Rainy Day Lo-Fi',
-      note: 'Mood mismatch — tag for later review.',
-      kind: 'Outlier' as PlaylistIssueKind
+      trackId: 'demo:outlier:2',
+      track: 'Rainy Day Lo-Fi — Nimbus Ensemble',
+      note: 'Mood mismatch. Consider moving to a chill set.',
+      kind: 'Outlier'
     }
   ]
-}
-
-const timeCapsuleQueue = ref<TimeCapsuleRow[]>([...TIME_CAPSULE_FALLBACK])
-
-const playlistFindings = reactive({
-  duplicates: [...PLAYLIST_FINDINGS_FALLBACK.duplicates] as PlaylistIssue[],
-  unavailable: [...PLAYLIST_FINDINGS_FALLBACK.unavailable] as PlaylistIssue[],
-  outliers: [...PLAYLIST_FINDINGS_FALLBACK.outliers] as PlaylistIssue[]
 })
 
-const playlistStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
-const playlistError = ref<string | null>(null)
-let libraryTrackLookup: Map<string, LibraryTrack> = new Map()
+type PlaylistFindingsGroup = {
+  duplicates: PlaylistIssue[]
+  unavailable: PlaylistIssue[]
+  outliers: PlaylistIssue[]
+}
+
+function applyPlaylistFindings(groups: PlaylistFindingsGroup, source: 'api' | 'demo' | 'unknown' = 'unknown') {
+  playlistFindings.duplicates = groups.duplicates.map((item) => ({ ...item }))
+  playlistFindings.unavailable = groups.unavailable.map((item) => ({ ...item }))
+  playlistFindings.outliers = groups.outliers.map((item) => ({ ...item }))
+  playlistSource.value = source
+}
+
+function clearPlaylistFindings() {
+  applyPlaylistFindings({ duplicates: [], unavailable: [], outliers: [] }, 'unknown')
+}
+
+function formatTrackLabel(trackId: string, metadata: Map<string, TrackMetadata>) {
+  const meta = metadata.get(trackId)
+  if (meta?.title && meta?.artist) {
+    return `${meta.title} — ${meta.artist}`
+  }
+  return trackId
+}
+
+function noteForKind(kind: PlaylistIssueKind, idx?: number) {
+  const position = typeof idx === 'number' && idx >= 0 ? ` (#${idx + 1})` : ''
+  switch (kind) {
+    case 'Duplicate':
+      return `Duplicate entry${position}. Remove extra copies.`
+    case 'Unavailable':
+      return `Track unavailable${position}. Replace it with an active version.`
+    case 'Outlier':
+    default:
+      return `Stylistic outlier${position}. Decide if it still fits.`
+  }
+}
+
+async function buildIssuesFromFindings(findings: PlaylistFinding[]): Promise<PlaylistFindingsGroup> {
+  if (!Array.isArray(findings) || !findings.length) {
+    return { duplicates: [], unavailable: [], outliers: [] }
+  }
+
+  const uniqueIds = Array.from(new Set(findings.map((item) => item.trackId).filter((id): id is string => typeof id === 'string' && id.length > 0)))
+  let metadata: TrackMetadata[] = []
+
+  if (uniqueIds.length) {
+    try {
+      metadata = await getTracks(uniqueIds)
+    } catch (error) {
+      console.warn('PlaylistHealth: unable to load track metadata, continuing with IDs only.', error)
+    }
+  }
+
+  const metadataMap = new Map(metadata.map((item) => [item.trackId, item]))
+  const groups: PlaylistFindingsGroup = { duplicates: [], unavailable: [], outliers: [] }
+
+  for (const finding of findings) {
+    if (!finding?.trackId) continue
+    const issue: PlaylistIssue = {
+      trackId: finding.trackId,
+      track: formatTrackLabel(finding.trackId, metadataMap),
+      note: noteForKind(finding.kind, finding.idx),
+      kind: finding.kind
+    }
+
+    switch (finding.kind) {
+      case 'Unavailable':
+        groups.unavailable.push(issue)
+        break
+      case 'Outlier':
+        groups.outliers.push(issue)
+        break
+      case 'Duplicate':
+      default:
+        groups.duplicates.push(issue)
+        break
+    }
+  }
+
+  return groups
+}
+
+function sampleTrackIds(ids: string[], limit: number) {
+  if (ids.length <= limit) {
+    return [...ids]
+  }
+
+  const copy = [...ids]
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    const temp = copy[i]!
+    copy[i] = copy[j]!
+    copy[j] = temp
+  }
+
+  return copy.slice(0, limit)
+}
 
 const storyMoments = [
   { time: '08:00', label: 'Connect', description: 'Link your Spotify account to get started.' },
@@ -187,7 +297,7 @@ const storyMoments = [
   { time: '08:50', label: 'Enjoy', description: 'Listen to your refreshed playlists.' }
 ]
 
-const swipeQueue = ref<string[]>(TIME_CAPSULE_FALLBACK.slice(0, 3).map((track) => track.trackId))
+const swipeQueue = ref<string[]>([])
 
 const isFlowStage = computed(() => ['swipe', 'timecapsule', 'playlist'].includes(stage.value))
 
@@ -213,14 +323,182 @@ function goHome() {
   stage.value = 'hub'
 }
 
-function connectAccount() {
-  connected.value = true
-  stage.value = 'hub'
+function resetConnectionState() {
+  connected.value = false
+  currentLink.value = null
+  swipeQueue.value = []
+  likedTracksSource.value = 'unknown'
+  lastSyncSummary.value = null
+  librarySyncError.value = null
+  connectError.value = null
+  timeCapsuleQueue.value = []
+  timeCapsuleSource.value = 'snapshot'
+  stage.value = 'connect'
 }
 
-function disconnectAccount() {
-  connected.value = false
-  stage.value = 'connect'
+async function connectAccount() {
+  if (connectLoading.value) {
+    return
+  }
+
+  connectError.value = null
+  try {
+    connectLoading.value = true
+    // Persist permissions before redirect
+    sessionStorage.setItem(PERMISSIONS_STORAGE_KEY, JSON.stringify(enabledPermissions.value))
+    
+    const redirectUri = `http://${SPOTIFY_REDIRECT_HOST}${SPOTIFY_REDIRECT_PATH}`
+    const { authorizeUrl, state } = await startAuth({
+      userId: ACTIVE_USER_ID,
+      platform: 'spotify',
+      scopes: SPOTIFY_SCOPES,
+      redirectUri
+    })
+    const payload = { state, userId: ACTIVE_USER_ID, createdAt: Date.now() }
+    sessionStorage.setItem(OAUTH_STATE_STORAGE_KEY, JSON.stringify(payload))
+    window.location.href = authorizeUrl
+  } catch (error) {
+    connectError.value = error instanceof Error
+      ? error.message
+      : 'Unable to start Spotify authorization.'
+    connectLoading.value = false
+  }
+}
+
+async function disconnectAccount() {
+  if (connectLoading.value) {
+    return
+  }
+
+  connectError.value = null
+  const linkToRevoke = currentLink.value
+  let revokeError: string | null = null
+  connectLoading.value = true
+  try {
+    if (linkToRevoke) {
+      await revokeLink(linkToRevoke.linkId)
+    }
+  } catch (error) {
+    revokeError = error instanceof Error ? error.message : 'Unable to revoke Spotify link.'
+    console.warn(revokeError)
+  } finally {
+    connectLoading.value = false
+    resetConnectionState()
+    sessionStorage.removeItem(OAUTH_STATE_STORAGE_KEY)
+    if (revokeError) {
+      connectError.value = revokeError
+    }
+  }
+}
+
+function clearOAuthParamsFromLocation() {
+  const url = new URL(window.location.href)
+  const hash = url.hash
+  const finalUrl = hash ? `/${hash}` : '/'
+  window.history.replaceState({}, document.title, finalUrl)
+}
+
+async function processOAuthCallback(): Promise<boolean> {
+  const url = new URL(window.location.href)
+  const code = url.searchParams.get('code')
+  const state = url.searchParams.get('state')
+  const errorParam = url.searchParams.get('error')
+  if (!code && !errorParam) {
+    return false
+  }
+
+  if (errorParam) {
+    const reason = errorParam === 'access_denied'
+      ? 'Spotify authorization was cancelled.'
+      : `Spotify authorization failed (${errorParam}).`
+    connectError.value = reason
+    sessionStorage.removeItem(OAUTH_STATE_STORAGE_KEY)
+    clearOAuthParamsFromLocation()
+    return true
+  }
+
+  if (!code || !state) {
+    connectError.value = 'Incomplete Spotify authorization response. Please try again.'
+    clearOAuthParamsFromLocation()
+    return true
+  }
+
+  const stored = sessionStorage.getItem(OAUTH_STATE_STORAGE_KEY)
+  if (!stored) {
+    connectError.value = 'Authorization session expired. Please try again.'
+    clearOAuthParamsFromLocation()
+    return true
+  }
+
+  let parsed: { state?: string; userId?: string } | null = null
+  try {
+    parsed = JSON.parse(stored)
+  } catch {
+    parsed = null
+  }
+
+  if (!parsed?.state || parsed.state !== state) {
+    connectError.value = 'Authorization state mismatch. Please try connecting again.'
+    sessionStorage.removeItem(OAUTH_STATE_STORAGE_KEY)
+    clearOAuthParamsFromLocation()
+    return true
+  }
+
+  let link: LinkHandle | null = null
+  try {
+    connectLoading.value = true
+    link = await completeAuth({ state, code })
+    currentLink.value = link
+    connected.value = true
+    
+    // Restore permissions from storage
+    const storedPerms = sessionStorage.getItem(PERMISSIONS_STORAGE_KEY)
+    if (storedPerms) {
+      try {
+        const parsed = JSON.parse(storedPerms)
+        if (Array.isArray(parsed)) {
+          enabledPermissions.value = parsed
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+    
+    sessionStorage.removeItem(OAUTH_STATE_STORAGE_KEY)
+    await resyncLibrary()
+    stage.value = 'hub'
+  } catch (error) {
+    connectError.value = error instanceof Error
+      ? error.message
+      : 'Unable to complete Spotify authorization.'
+    if (!link) {
+      connected.value = false
+    }
+  } finally {
+    connectLoading.value = false
+    clearOAuthParamsFromLocation()
+  }
+
+  return true
+}
+
+async function hydrateExistingLink() {
+  try {
+    const links = await listLinks(ACTIVE_USER_ID)
+    if (!links.length) {
+      currentLink.value = null
+      connected.value = false
+      return
+    }
+    const match = links.find((entry) => !entry.platform || entry.platform === 'spotify') ?? links[0]!
+    currentLink.value = match
+    connected.value = true
+    if (stage.value === 'connect') {
+      stage.value = 'hub'
+    }
+  } catch (error) {
+    console.warn('Unable to load existing platform links.', error)
+  }
 }
 
 function queueTrackForSwipe(trackId: string) {
@@ -248,257 +526,169 @@ function ensureConnection(target?: Stage) {
   return true
 }
 
-const LIBRARY_PAYLOAD_URL = new URL('./data/library_sync_payload.json', import.meta.url)
-const MS_PER_DAY = 86_400_000
-const YEARS_FOR_MAX_STALENESS = 5
-let cachedLibraryPayload: LibrarySyncPayload | null = null
+function describeBootstrap(result?: (BootstrapResult & { syncCounts?: any }) | null) {
+  if (!result) {
+    return 'Library sync completed.'
+  }
 
-onMounted(() => {
-  hydrateFromLibraryPayload().catch((error) => {
-    console.warn('Initial library hydration failed', error)
-  })
-})
-
-watch(
-  () => connected.value,
-  (isConnected) => {
-    if (isConnected && cachedLibraryPayload) {
-      refreshPlaylistHealth(cachedLibraryPayload).catch((error) => {
-        console.warn('Playlist health refresh failed after connecting', error)
-      })
+  const parts: string[] = []
+  
+  // Show sync counts if available
+  if (result.syncCounts) {
+    const { likes, plays, playlists, tracks } = result.syncCounts
+    const syncParts: string[] = []
+    if (typeof likes === 'number') syncParts.push(`${likes} likes`)
+    if (typeof plays === 'number') syncParts.push(`${plays} plays`)
+    if (typeof playlists === 'number') syncParts.push(`${playlists} playlists`)
+    if (typeof tracks === 'number') syncParts.push(`${tracks} tracks`)
+    if (syncParts.length) {
+      parts.push(`Synced: ${syncParts.join(', ')}`)
     }
   }
-)
-
-async function hydrateFromLibraryPayload() {
-  try {
-    const response = await fetch(LIBRARY_PAYLOAD_URL)
-
-    if (!response.ok) {
-      throw new Error(`Library payload request failed: ${response.status}`)
-    }
-
-    const payload = (await response.json()) as LibrarySyncPayload
-    cachedLibraryPayload = payload
-    libraryTrackLookup = new Map(payload.tracks.map((track) => [track.trackId, track]))
-
-    buildTimeCapsuleFromPayload(payload)
-
-    if (connected.value) {
-      await refreshPlaylistHealth(payload)
-    } else {
-      playlistStatus.value = 'idle'
-    }
-  } catch (error) {
-    applyTimeCapsuleFallback()
-    applyPlaylistFallback('Unable to load playlist data yet. Connect and refresh to try again.')
-    throw error
+  
+  const ingestedCount = result.ingested
+  if (typeof ingestedCount === 'number') {
+    parts.push(`${ingestedCount} stats ingested`)
   }
+
+  if (result.ensuredWeights) {
+    parts.push('weights initialized')
+  }
+
+  return parts.length ? parts.join(' · ') : 'Library sync completed.'
 }
 
-function buildTimeCapsuleFromPayload(payload: LibrarySyncPayload) {
-  if (!payload.likes?.length) {
-    timeCapsuleQueue.value = []
-    return
-  }
+async function syncLibraryAndScores(userId: string): Promise<BootstrapResult & { syncCounts?: any }> {
+  await ensureLink(userId, 'spotify')
 
-  const now = Date.now()
-  const dedupedLikes = dedupeLikesByTrack(payload.likes)
-  const oldestLikesFirst = [...dedupedLikes].sort((a, b) => a.addedAt - b.addedAt)
-  const selectedLikes = oldestLikesFirst.slice(0, 40)
-
-  const queue = selectedLikes
-    .map((entry) => {
-      const track = libraryTrackLookup.get(entry.trackId)
-      const addedMs = entry.addedAt * 1000
-
-      return {
-        trackId: entry.trackId,
-        title: track?.title ?? entry.trackId,
-        artist: track?.artist ?? 'Unknown artist',
-        lastPlayed: formatLibraryTimestamp(addedMs, now),
-        staleness: computeStalenessScore(addedMs, now)
+  try {
+    // Try to fetch fresh data from Spotify first
+    try {
+      const syncResult = await syncLibraryFromSpotify(userId)
+      console.log('Synced from Spotify:', syncResult.counts)
+    } catch (syncError) {
+      // If sync fails (e.g., duplicate key error), continue with existing cache data
+      console.warn('Spotify sync failed, using existing cache data:', syncError)
+      if (syncError && typeof syncError === 'object' && 'body' in syncError) {
+        console.warn('Sync error details:', (syncError as any).body)
       }
-    })
-    .filter((row) => row !== undefined)
-    .sort((a, b) => b.staleness - a.staleness)
+    }
+    
+    // Then ingest into TrackScoring (will use whatever is in cache)
+    const bootstrap = await ingestTrackScoringFromLibrary(userId)
+    return { ...bootstrap }
+  } catch (error) {
+    if (!import.meta.env.DEV) {
+      throw error instanceof Error ? error : new Error('Unable to ingest track scores.')
+    }
 
-  timeCapsuleQueue.value = queue
+    console.error('Track scoring ingest failed; using demo snapshot fallback.', error)
+    if (error && typeof error === 'object' && 'body' in error) {
+      console.error('Error body:', (error as any).body)
+    }
+    const snapshot = await loadDemoSnapshot()
+    if (!snapshot.userId || snapshot.userId !== userId) {
+      snapshot.userId = userId
+    }
+    await syncLibrary(snapshot)
+    return ingestTrackScoringFromLibrary(userId)
+  }
 }
 
-async function refreshPlaylistHealth(payload: LibrarySyncPayload) {
-  if (!payload.likes?.length) {
-    playlistFindings.duplicates = []
-    playlistFindings.unavailable = []
-    playlistFindings.outliers = []
-    playlistStatus.value = 'ready'
-    playlistError.value = null
+async function refreshLikedTracks() {
+  likedTracksError.value = null
+  likedTracksLoading.value = true
+
+  try {
+    const result = await getLikedTracks(ACTIVE_USER_ID)
+    likedTracksSource.value = result.source
+    if (result.trackIds.length) {
+      const unique = Array.from(new Set(result.trackIds))
+      swipeQueue.value = unique
+      likedTrackIds.value = unique
+    } else {
+      likedTrackIds.value = []
+    }
+  } catch (error) {
+    likedTracksError.value = error instanceof Error ? error.message : 'Unable to load liked tracks.'
+  } finally {
+    likedTracksLoading.value = false
+  }
+}
+
+async function refreshPlaylistHealth() {
+  if (playlistStatus.value === 'loading') {
     return
   }
 
-  playlistStatus.value = 'loading'
   playlistError.value = null
+  playlistStatus.value = 'loading'
+  clearPlaylistFindings()
+
+  if (!connected.value) {
+    playlistError.value = 'Connect Spotify to analyze playlists.'
+    applyPlaylistFindings(PLAYLIST_FALLBACK_ISSUES, 'demo')
+    playlistStatus.value = 'error'
+    return
+  }
+
+  if (!enabledPermissions.value.includes('playlists')) {
+    playlistError.value = 'Playlist permission is disabled. Enable it to run analysis.'
+    applyPlaylistFindings(PLAYLIST_FALLBACK_ISSUES, 'demo')
+    playlistStatus.value = 'error'
+    return
+  }
+
+  const baseIds = likedTrackIds.value
+  if (!baseIds.length) {
+    playlistError.value = 'No tracks available to analyze yet. Sync your library first.'
+    applyPlaylistFindings(PLAYLIST_FALLBACK_ISSUES, 'demo')
+    playlistStatus.value = 'error'
+    return
+  }
 
   try {
-    const trackIds = dedupeTrackIds(payload.likes, 100)
-    if (!trackIds.length) {
-      playlistFindings.duplicates = []
-      playlistFindings.unavailable = []
-      playlistFindings.outliers = []
-      playlistStatus.value = 'ready'
-      return
-    }
-
-    const playlistId = `liked:${payload.userId ?? 'library'}`
-    const { snapshotId } = await createSnapshot({
-      playlistId,
-      userId: payload.userId ?? 'unknown-user',
-      trackIds
-    })
-    const { reportId } = await analyzeSnapshot({
-      playlistId,
-      snapshotId
-    })
+    const trackIds = sampleTrackIds(baseIds, 200)
+    const playlistId = `liked:${ACTIVE_USER_ID}`
+    const { snapshotId } = await createSnapshot({ playlistId, userId: ACTIVE_USER_ID, trackIds })
+    const { reportId } = await analyzeSnapshot({ playlistId, snapshotId })
     const report = await getReport({ reportId })
-    const grouped = groupFindings(report.findings)
-
-    playlistFindings.duplicates = grouped.duplicates
-    playlistFindings.unavailable = grouped.unavailable
-    playlistFindings.outliers = grouped.outliers
+    const groups = await buildIssuesFromFindings(Array.isArray(report.findings) ? report.findings : [])
+    applyPlaylistFindings(groups, 'api')
+    playlistError.value = null
     playlistStatus.value = 'ready'
   } catch (error) {
-    applyPlaylistFallback('Unable to reach playlist health service. Showing sample issues instead.')
-    throw error
+    console.error('PlaylistHealth analysis failed', error)
+    playlistError.value = error instanceof Error ? error.message : 'Unable to analyze playlist.'
+    applyPlaylistFindings(PLAYLIST_FALLBACK_ISSUES, 'demo')
+    playlistStatus.value = 'error'
   }
 }
 
-function dedupeLikesByTrack(likes: LibraryLikeEntry[]) {
-  const seen = new Map<string, LibraryLikeEntry>()
+async function resyncLibrary() {
+  librarySyncError.value = null
+  librarySyncing.value = true
 
-  for (const entry of likes) {
-    const existing = seen.get(entry.trackId)
-    if (!existing || entry.addedAt < existing.addedAt) {
-      seen.set(entry.trackId, entry)
-    }
-  }
-
-  return Array.from(seen.values())
-}
-
-function dedupeTrackIds(likes: LibraryLikeEntry[], limit: number) {
-  const seen = new Set<string>()
-  const sorted = [...likes].sort((a, b) => b.addedAt - a.addedAt)
-  const result: string[] = []
-
-  for (const entry of sorted) {
-    if (seen.has(entry.trackId)) continue
-    seen.add(entry.trackId)
-    result.push(entry.trackId)
-    if (result.length >= limit) break
-  }
-
-  return result
-}
-
-function groupFindings(findings: PlaylistHealthFinding[]) {
-  const buckets = {
-    duplicates: [] as PlaylistIssue[],
-    unavailable: [] as PlaylistIssue[],
-    outliers: [] as PlaylistIssue[]
-  }
-
-  for (const finding of findings) {
-    const issue = createPlaylistIssue(finding)
-
-    switch (finding.kind) {
-      case 'Duplicate':
-        buckets.duplicates.push(issue)
-        break
-      case 'Unavailable':
-        buckets.unavailable.push(issue)
-        break
-      case 'Outlier':
-      default:
-        buckets.outliers.push(issue)
-        break
-    }
-  }
-
-  return buckets
-}
-
-function createPlaylistIssue(finding: PlaylistHealthFinding): PlaylistIssue {
-  return {
-    trackId: finding.trackId,
-    track: formatTrackLabel(finding.trackId),
-    note: noteForKind(finding.kind, finding.idx),
-    kind: finding.kind
-  }
-}
-
-function formatTrackLabel(trackId: string) {
-  const track = libraryTrackLookup.get(trackId)
-
-  if (!track) {
-    return trackId
-  }
-
-  return `${track.title} — ${track.artist}`
-}
-
-function noteForKind(kind: PlaylistIssueKind, idx?: number) {
-  switch (kind) {
-    case 'Duplicate':
-      return idx != null
-        ? `Appears multiple times (slot ${idx + 1}).`
-        : 'Appears multiple times in this playlist.'
-    case 'Unavailable':
-      return 'Track is no longer available — swap it out.'
-    case 'Outlier':
-    default:
-      return 'Energy or mood mismatch compared to the rest of the playlist.'
-  }
-}
-
-function computeStalenessScore(playedAtMs: number, nowMs: number) {
-  const diff = Math.max(0, nowMs - playedAtMs)
-  const daysSince = diff / MS_PER_DAY
-  const yearsSince = daysSince / 365
-  const normalized = Math.min(1, yearsSince / YEARS_FOR_MAX_STALENESS)
-
-  return Math.round(normalized * 100)
-}
-
-function formatLibraryTimestamp(timestampMs: number, nowMs: number) {
-  if (timestampMs > nowMs) {
-    return 'Just added'
-  }
-
-  return formatMonthYear(timestampMs)
-}
-
-function formatMonthYear(timestampMs: number) {
   try {
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      year: 'numeric'
-    }).format(timestampMs)
+    const bootstrap = await syncLibraryAndScores(ACTIVE_USER_ID)
+    lastSyncSummary.value = describeBootstrap(bootstrap)
+  await refreshLikedTracks()
+  await Promise.all([refreshTimeCapsule(), refreshPlaylistHealth()])
   } catch (error) {
-    console.warn('Unable to format timestamp', timestampMs, error)
-    return 'Unknown'
+    const message = error instanceof Error ? error.message : 'Unable to sync library.'
+    librarySyncError.value = message
+    throw error
+  } finally {
+    librarySyncing.value = false
   }
 }
 
-function applyTimeCapsuleFallback() {
-  timeCapsuleQueue.value = [...TIME_CAPSULE_FALLBACK]
-}
-
-function applyPlaylistFallback(message?: string) {
-  playlistFindings.duplicates = [...PLAYLIST_FINDINGS_FALLBACK.duplicates]
-  playlistFindings.unavailable = [...PLAYLIST_FINDINGS_FALLBACK.unavailable]
-  playlistFindings.outliers = [...PLAYLIST_FINDINGS_FALLBACK.outliers]
-  playlistStatus.value = message ? 'error' : 'ready'
-  playlistError.value = message ?? null
+async function handleManualResync() {
+  try {
+    await resyncLibrary()
+  } catch {
+    // error already captured in librarySyncError
+  }
 }
 
 const heroContent = computed<HeroContent>(() => {
@@ -522,7 +712,7 @@ const heroContent = computed<HeroContent>(() => {
         title: 'Connect your Spotify account',
         copy:
           'Link Spotify to start rediscovering your music. You control what data we can access.',
-        primaryLabel: 'Connect account',
+        primaryLabel: connectLoading.value ? 'Connecting…' : 'Connect account',
         primaryAction: connectAccount
       }
     case 'hub':
@@ -588,10 +778,10 @@ const timeCapsuleStats = computed(() => {
     }
   }
 
-  const stalenessValues = queue.map((item) => item.staleness)
+  const stalenessValues = queue.map((item) => item.stalenessPercent)
   const averageStaleness = Math.round(stalenessValues.reduce((sum, value) => sum + value, 0) / total)
-  const highStalenessCount = queue.filter((item) => item.staleness >= 75).length
-  const spotlightTrack = [...queue].sort((a, b) => b.staleness - a.staleness)[0] ?? null
+  const highStalenessCount = queue.filter((item) => item.stalenessPercent >= 85).length
+  const spotlightTrack = queue[0] ?? null
   const uniqueArtists = new Set(queue.map((item) => item.artist)).size
 
   return {
@@ -615,6 +805,145 @@ const apiBaseDisplay = computed(() => {
     return API_BASE_URL
   }
 })
+
+const playlistHasFindings = computed(
+  () =>
+    playlistFindings.duplicates.length +
+    playlistFindings.unavailable.length +
+    playlistFindings.outliers.length >
+    0
+)
+
+const playlistSourceLabel = computed(() => {
+  switch (playlistSource.value) {
+    case 'api':
+      return 'Analysis from PlaylistHealth'
+    case 'demo':
+      return 'Sample data (offline)'
+    default:
+      return ''
+  }
+})
+
+const timeCapsuleSourceMeta = computed<TimeCapsuleSourceMetaState>(() => {
+  switch (timeCapsuleSource.value) {
+    case 'api-scores':
+      return {
+        label: 'Live preview',
+        detail: 'Using stored resurfacing scores from TrackScoring.',
+        variant: 'success'
+      }
+    case 'api-bootstrap':
+      return {
+        label: 'Bootstrapped preview',
+        detail: 'Seeded from recent listening stats while scores warm up.',
+        variant: 'accent'
+      }
+    case 'api-unknown':
+      return {
+        label: 'Live preview',
+        detail: 'Preview data returned directly from the TrackScoring service.',
+        variant: 'neutral'
+      }
+    case 'snapshot-empty':
+      return {
+        label: 'Snapshot fallback',
+        detail: 'Live preview returned no tracks yet; showing the snapshot backlog.',
+        variant: 'warning'
+      }
+    case 'snapshot-error':
+      return {
+        label: 'Snapshot fallback',
+        detail: timeCapsuleError.value ?? 'Live preview unavailable; displaying saved snapshot data.',
+        variant: 'warning'
+      }
+    case 'snapshot':
+    default:
+      return {
+        label: 'Snapshot fallback',
+        detail: 'Using the saved library snapshot for suggestions.',
+        variant: 'muted'
+      }
+  }
+})
+
+const likedTracksSourceLabel = computed(() => {
+  switch (likedTracksSource.value) {
+    case 'api':
+      return 'LibraryCache (live)'
+    case 'offline-demo':
+      return 'Demo snapshot'
+    default:
+      return likedTracksLoading.value ? 'Loading…' : 'Not loaded yet'
+  }
+})
+
+async function refreshTimeCapsule() {
+  timeCapsuleError.value = null
+  timeCapsuleLoading.value = true
+
+  try {
+    const { tracks, source } = await loadTimeCapsuleTracks(ACTIVE_USER_ID, 12)
+    timeCapsuleQueue.value = tracks
+    timeCapsuleSource.value = source
+  } catch (error) {
+    timeCapsuleError.value = error instanceof Error ? error.message : 'Unable to load time-capsule data.'
+    timeCapsuleSource.value = 'snapshot-error'
+    timeCapsuleQueue.value = []
+  } finally {
+    timeCapsuleLoading.value = false
+  }
+}
+
+onMounted(async () => {
+  // Restore permissions from storage if available
+  const storedPerms = sessionStorage.getItem(PERMISSIONS_STORAGE_KEY)
+  if (storedPerms) {
+    try {
+      const parsed = JSON.parse(storedPerms)
+      if (Array.isArray(parsed)) {
+        enabledPermissions.value = parsed
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+  
+  const handled = await processOAuthCallback()
+  if (!handled) {
+    await hydrateExistingLink()
+  }
+
+  if (connected.value) {
+    if (!timeCapsuleQueue.value.length) {
+      await refreshTimeCapsule()
+    }
+    if (!swipeQueue.value.length) {
+      await refreshLikedTracks()
+    }
+    if (playlistStatus.value === 'idle') {
+      await refreshPlaylistHealth()
+    }
+  }
+})
+
+watch(
+	() => stage.value,
+	(next) => {
+		if (next === 'playlist') {
+			void refreshPlaylistHealth()
+		}
+	}
+)
+
+watch(
+  () => likedTrackIds.value,
+  (ids) => {
+    if (Array.isArray(ids) && ids.length && stage.value === 'playlist') {
+      void refreshPlaylistHealth()
+    }
+  }
+)
 </script>
 
 <template>
@@ -690,7 +1019,14 @@ const apiBaseDisplay = computed(() => {
         <h1>{{ heroContent.title }}</h1>
         <p>{{ heroContent.copy }}</p>
         <div class="hero__actions">
-          <button class="hero__cta" type="button" @click="heroContent.primaryAction">{{ heroContent.primaryLabel }}</button>
+          <button
+            class="hero__cta"
+            type="button"
+            :disabled="stage === 'connect' && !connected && connectLoading"
+            @click="heroContent.primaryAction"
+          >
+            {{ heroContent.primaryLabel }}
+          </button>
           <button
             v-if="heroContent.secondaryLabel && heroContent.secondaryAction"
             class="hero__secondary"
@@ -712,6 +1048,20 @@ const apiBaseDisplay = computed(() => {
               <li>Choose which data you want to share.</li>
               <li>Start exploring your music library.</li>
             </ul>
+            <div class="connect-status" role="status">
+              <p>
+                <strong>Library sync:</strong>
+                <span>{{ librarySyncing ? 'Syncing…' : lastSyncSummary ?? 'Not synced yet' }}</span>
+              </p>
+              <p>
+                <strong>Liked tracks:</strong>
+                <span>{{ likedTracksSourceLabel }}</span>
+              </p>
+              <p v-if="likedTracksLoading" class="connect-status__hint">Loading liked tracks…</p>
+              <p v-if="likedTracksError" class="connect-error">{{ likedTracksError }}</p>
+              <p v-else-if="connectError" class="connect-error">{{ connectError }}</p>
+              <p v-else-if="librarySyncError" class="connect-error">{{ librarySyncError }}</p>
+            </div>
           </article>
         </div>
 
@@ -739,6 +1089,14 @@ const apiBaseDisplay = computed(() => {
                   {{ enabledPermissions.includes(permission.id) ? 'Allowed' : 'Blocked' }}
                 </span>
               </button>
+            </div>
+            <div v-if="connected" class="connect-inline-actions">
+              <button type="button" :disabled="librarySyncing || connectLoading" @click="handleManualResync">
+                {{ librarySyncing ? 'Syncing…' : 'Sync from Spotify & refresh scores' }}
+              </button>
+              <p class="connect-inline-actions__hint">
+                Pulls your latest library and play history from Spotify, then refreshes TrackScoring.
+              </p>
             </div>
           </div>
 
@@ -815,7 +1173,7 @@ const apiBaseDisplay = computed(() => {
             <li>Set how many tracks you want to review.</li>
           </ul>
         </section>
-        <SwipeSession class="flow-session" :seed-tracks="swipeQueue" @update:seedTracks="setSwipeQueue" />
+        <SwipeSession class="flow-session" :seed-tracks="swipeQueue" :user-id="ACTIVE_USER_ID" @update:seedTracks="setSwipeQueue" />
       </template>
 
       <template v-else-if="stage === 'timecapsule'">
@@ -825,6 +1183,23 @@ const apiBaseDisplay = computed(() => {
             <p>
               Tracks you haven't listened to recently, sorted by how long it's been since you last played them.
             </p>
+            <div class="timecapsule-controls" aria-live="polite">
+              <div class="timecapsule-source">
+                <span :class="['source-pill', `source-pill--${timeCapsuleSourceMeta.variant}`]">
+                  {{ timeCapsuleSourceMeta.label }}
+                </span>
+                <span class="source-detail">{{ timeCapsuleSourceMeta.detail }}</span>
+              </div>
+              <button
+                type="button"
+                class="refresh-button"
+                :disabled="timeCapsuleLoading"
+                @click="refreshTimeCapsule"
+              >
+                <span v-if="timeCapsuleLoading" class="refresh-button__spinner" aria-hidden="true"></span>
+                <span>{{ timeCapsuleLoading ? 'Refreshing…' : 'Refresh' }}</span>
+              </button>
+            </div>
           </div>
 
           <div class="timecapsule-overview">
@@ -863,29 +1238,42 @@ const apiBaseDisplay = computed(() => {
                     <th />
                   </tr>
                 </thead>
-                <tbody v-if="timeCapsuleQueue.length">
-                  <tr v-for="row in timeCapsuleQueue" :key="row.trackId">
-                    <td>{{ row.title }}</td>
-                    <td>{{ row.artist }}</td>
-                    <td>{{ row.lastPlayed }}</td>
-                    <td><span class="pill">{{ row.staleness }}%</span></td>
-                    <td>
-                      <button
-                        type="button"
-                        :disabled="swipeQueue.includes(row.trackId)"
-                        @click="queueTrackForSwipe(row.trackId)"
-                      >
-                        {{ swipeQueue.includes(row.trackId) ? 'Added' : 'Add to queue' }}
-                      </button>
+                <tbody>
+                  <tr v-if="timeCapsuleLoading" class="timecapsule-row--loading">
+                    <td colspan="5">
+                      <span class="loading-message">Loading time-capsule tracks…</span>
                     </td>
                   </tr>
-                </tbody>
-                <tbody v-else>
-                  <tr>
-                    <td class="timecapsule-empty" colspan="5">
-                      No eligible tracks found yet. Try syncing your library again.
+                  <tr v-else-if="timeCapsuleError" class="timecapsule-row--error">
+                    <td colspan="5">
+                      <span class="error-message">{{ timeCapsuleError }}</span>
+                      <button type="button" class="retry-button" @click="refreshTimeCapsule">Try again</button>
                     </td>
                   </tr>
+                  <tr v-else-if="!timeCapsuleQueue.length" class="timecapsule-row--empty">
+                    <td colspan="5">
+                      <span class="empty-message">No tracks to show right now. Check back soon.</span>
+                    </td>
+                  </tr>
+                  <template v-else>
+                    <tr v-for="row in timeCapsuleQueue" :key="row.trackId">
+                      <td>{{ row.title }}</td>
+                      <td>{{ row.artist }}</td>
+                      <td>
+                        <span :title="row.lastPlayedAbsolute">{{ row.lastPlayedRelative }}</span>
+                      </td>
+                      <td><span class="pill">{{ row.stalenessPercent }}%</span></td>
+                      <td>
+                        <button
+                          type="button"
+                          :disabled="swipeQueue.includes(row.trackId)"
+                          @click="queueTrackForSwipe(row.trackId)"
+                        >
+                          {{ swipeQueue.includes(row.trackId) ? 'Added' : 'Add to queue' }}
+                        </button>
+                      </td>
+                    </tr>
+                  </template>
                 </tbody>
               </table>
             </div>
@@ -894,7 +1282,12 @@ const apiBaseDisplay = computed(() => {
               <div v-if="timeCapsuleStats.spotlightTrack" class="timecapsule-spotlight">
                 <span class="timecapsule-spotlight__badge">Spotlight</span>
                 <h3>{{ timeCapsuleStats.spotlightTrack.title }}</h3>
-                <p>{{ timeCapsuleStats.spotlightTrack.artist }} · Last played {{ timeCapsuleStats.spotlightTrack.lastPlayed }}</p>
+                <p>
+                  {{ timeCapsuleStats.spotlightTrack.artist }} · Last played
+                  <span :title="timeCapsuleStats.spotlightTrack.lastPlayedAbsolute">
+                    {{ timeCapsuleStats.spotlightTrack.lastPlayedRelative }}
+                  </span>
+                </p>
                 <p>
                   This track hasn't been played in a while. Add it to your queue to review.
                 </p>
@@ -922,53 +1315,62 @@ const apiBaseDisplay = computed(() => {
 
       <template v-else-if="stage === 'playlist'">
         <section class="playlist-report">
-          <h2>Playlist issues</h2>
-          <p>Review and fix any problems found in your playlists.</p>
-          <p v-if="playlistStatus === 'loading'" class="playlist-status">Scanning playlists…</p>
-          <p v-else-if="playlistStatus === 'error' && playlistError" class="playlist-status playlist-status--error">
-            {{ playlistError }}
-          </p>
-          <div class="report-columns">
+          <header class="playlist-report__header">
+            <div>
+              <h2>Playlist issues</h2>
+              <p>Review and fix any problems found in your playlists.</p>
+            </div>
+            <div class="playlist-report__controls">
+              <span v-if="playlistSourceLabel" class="playlist-report__badge">{{ playlistSourceLabel }}</span>
+              <button :disabled="playlistStatus === 'loading'" type="button" @click="refreshPlaylistHealth">
+                {{ playlistStatus === 'loading' ? 'Analyzing…' : 'Rescan' }}
+              </button>
+            </div>
+          </header>
+
+          <div v-if="playlistStatus === 'loading'" class="playlist-report__state">Analyzing playlist…</div>
+          <template v-else>
+            <div v-if="playlistStatus === 'error'" class="playlist-report__state playlist-report__state--error">
+              <p>{{ playlistError ?? 'Unable to analyze playlist.' }}</p>
+              <button type="button" class="retry-button" @click="refreshPlaylistHealth">Try again</button>
+            </div>
+            <div v-if="playlistHasFindings" class="report-columns">
             <div>
               <h3>Duplicates</h3>
               <ul>
-                <li v-if="!playlistFindings.duplicates.length" class="playlist-empty">
-                  No duplicates detected.
-                </li>
                 <li v-for="item in playlistFindings.duplicates" :key="item.trackId">
                   <strong>{{ item.track }}</strong>
                   <p>{{ item.note }}</p>
                   <button type="button">Remove duplicate</button>
                 </li>
+                <li v-if="!playlistFindings.duplicates.length" class="report-empty">No duplicates found.</li>
               </ul>
             </div>
             <div>
               <h3>Unavailable</h3>
               <ul>
-                <li v-if="!playlistFindings.unavailable.length" class="playlist-empty">
-                  All tracks are currently playable.
-                </li>
                 <li v-for="item in playlistFindings.unavailable" :key="item.trackId">
                   <strong>{{ item.track }}</strong>
                   <p>{{ item.note }}</p>
                   <button type="button">Swap source</button>
                 </li>
+                <li v-if="!playlistFindings.unavailable.length" class="report-empty">All tracks available.</li>
               </ul>
             </div>
             <div>
               <h3>Mood outliers</h3>
               <ul>
-                <li v-if="!playlistFindings.outliers.length" class="playlist-empty">
-                  No energy mismatches found.
-                </li>
                 <li v-for="item in playlistFindings.outliers" :key="item.trackId">
                   <strong>{{ item.track }}</strong>
                   <p>{{ item.note }}</p>
                   <button type="button">Tag for review</button>
                 </li>
+                <li v-if="!playlistFindings.outliers.length" class="report-empty">No mood outliers detected.</li>
               </ul>
             </div>
-          </div>
+            </div>
+            <div v-else class="playlist-report__state">No issues detected. You're all set!</div>
+          </template>
         </section>
       </template>
     </div>
@@ -1293,6 +1695,32 @@ const apiBaseDisplay = computed(() => {
   color: rgba(255, 255, 255, 0.62);
 }
 
+.connect-status {
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  border-radius: 16px;
+  background: rgba(29, 185, 84, 0.08);
+  border: 1px solid rgba(29, 185, 84, 0.22);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.connect-status p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.connect-status__hint {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.connect-error {
+  color: #ff8080;
+  font-size: 0.85rem;
+}
+
 .connect-main-grid {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
@@ -1363,6 +1791,43 @@ const apiBaseDisplay = computed(() => {
   color: rgba(255, 255, 255, 0.45);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.connect-inline-actions {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.connect-inline-actions button {
+  align-self: flex-start;
+  padding: 0.6rem 1.4rem;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(135deg, var(--spotify-green), var(--spotify-green-bright));
+  color: var(--spotify-black);
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.connect-inline-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.connect-inline-actions button:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 24px rgba(29, 185, 84, 0.3);
+}
+
+.connect-inline-actions__hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .journey-grid {
@@ -1507,6 +1972,12 @@ const apiBaseDisplay = computed(() => {
   }
 }
 
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .story-panel {
   padding: 2rem;
   border-radius: 22px;
@@ -1600,6 +2071,102 @@ const apiBaseDisplay = computed(() => {
   color: rgba(255, 255, 255, 0.62);
 }
 
+.timecapsule-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.timecapsule-source {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.source-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.source-pill--success {
+  background: rgba(29, 185, 84, 0.18);
+  border-color: rgba(29, 185, 84, 0.35);
+  color: var(--spotify-green-bright);
+}
+
+.source-pill--accent {
+  background: rgba(180, 155, 255, 0.18);
+  border-color: rgba(180, 155, 255, 0.35);
+  color: rgba(180, 155, 255, 0.94);
+}
+
+.source-pill--neutral {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--spotify-text);
+}
+
+.source-pill--warning {
+  background: rgba(255, 214, 102, 0.18);
+  border-color: rgba(255, 214, 102, 0.28);
+  color: #ffd666;
+}
+
+.source-pill--muted {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--spotify-text-muted);
+}
+
+.source-detail {
+  font-size: 0.82rem;
+  color: var(--spotify-text-muted);
+  max-width: 360px;
+}
+
+.refresh-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 1.2rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--spotify-text);
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.refresh-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.refresh-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
+}
+
+.refresh-button__spinner {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.38);
+  border-top-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+
 .timecapsule-overview {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -1660,13 +2227,6 @@ const apiBaseDisplay = computed(() => {
   padding: 0.85rem;
   text-align: left;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.timecapsule-empty {
-  padding: 1.5rem 0;
-  text-align: center;
-  color: rgba(255, 255, 255, 0.45);
-  font-style: italic;
 }
 
 .timecapsule-table button {
@@ -1776,14 +2336,76 @@ const apiBaseDisplay = computed(() => {
   margin-top: 0;
 }
 
-.playlist-status {
-  margin: 0.25rem 0 1.25rem;
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 0.9rem;
+.playlist-report__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex-wrap: wrap;
 }
 
-.playlist-status--error {
-  color: var(--spotify-red, #ef476f);
+.playlist-report__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.playlist-report__controls button {
+  padding: 0.5rem 1.2rem;
+  border-radius: 999px;
+  border: none;
+  background: rgba(29, 185, 84, 0.22);
+  color: var(--spotify-green-bright);
+  cursor: pointer;
+}
+
+.playlist-report__controls button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.playlist-report__controls button:not(:disabled):hover {
+  background: rgba(29, 185, 84, 0.3);
+}
+
+.playlist-report__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.playlist-report__state {
+  margin-top: 1.5rem;
+  padding: 1.2rem;
+  border-radius: 16px;
+  background: rgba(24, 24, 24, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.playlist-report__state--error {
+  border-color: rgba(255, 99, 71, 0.35);
+  color: rgba(255, 186, 163, 0.95);
+}
+
+.retry-button {
+  padding: 0.5rem 1.3rem;
+  border-radius: 999px;
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  cursor: pointer;
+}
+
+.retry-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.playlist-report__state--error .retry-button {
+  margin-top: 0.9rem;
 }
 
 .report-columns {
@@ -1809,12 +2431,6 @@ const apiBaseDisplay = computed(() => {
   border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.playlist-empty {
-  padding: 0.75rem 0;
-  color: rgba(255, 255, 255, 0.45);
-  font-style: italic;
-}
-
 .report-columns p {
   margin: 0.35rem 0 0.75rem;
   color: rgba(255, 255, 255, 0.55);
@@ -1831,6 +2447,15 @@ const apiBaseDisplay = computed(() => {
 
 .report-columns button:hover {
   background: rgba(29, 185, 84, 0.3);
+}
+
+.report-empty {
+  padding: 0.75rem 1rem;
+  border-radius: 14px;
+  background: rgba(24, 24, 24, 0.6);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.9rem;
 }
 
 @media (max-width: 1080px) {

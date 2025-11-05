@@ -9,11 +9,12 @@ import {
   endSession,
   type SessionMode
 } from '../services/swipeSessions'
-import { getLikedTracks, type LikedTracksSource } from '../services/libraryCache'
+import { getLikedTracks, getTracks, type LikedTracksSource, type TrackMetadata } from '../services/libraryCache'
 import { getDemoTrackMeta, getDemoLikeEntry } from '../data/demoLibraryCache'
+import { getPreview, ingestFromLibrary } from '../services/trackScoring'
 import SpotifyPreview from './SpotifyPreview.vue'
 
-const props = defineProps<{ seedTracks: string[] }>()
+const props = defineProps<{ seedTracks: string[]; userId?: string }>()
 const emit = defineEmits<{ 'update:seedTracks': [tracks: string[]] }>()
 
 const DEFAULT_SIZE = 30
@@ -27,11 +28,18 @@ interface DecisionRecord {
 }
 
 const form = reactive({
-  userId: DEFAULT_USER_ID,
+  userId: props.userId || DEFAULT_USER_ID,
   size: DEFAULT_SIZE,
   playlistId: '',
   queueText: ''
 })
+
+// Auto-update userId when prop changes
+watch(() => props.userId, (newUserId) => {
+  if (newUserId && newUserId !== form.userId) {
+    form.userId = newUserId
+  }
+}, { immediate: true })
 
 const sessionId = ref<string | null>(null)
 const starting = ref(false)
@@ -49,6 +57,15 @@ const likesPulledCount = ref<number | null>(null)
 const likesSource = ref<LikedTracksSource | null>(null)
 const likesPreview = ref<string[]>([])
 
+// Holds preview metadata (score, lastPlayed) keyed by trackId for the current queue
+const previewIndex = ref<Record<string, { score?: number; lastPlayedAt?: number }>>({})
+
+type CachedTrackMetadata = TrackMetadata & { source: 'api' | 'demo' }
+
+const trackMetadata = ref<Record<string, CachedTrackMetadata>>({})
+let metadataRequestId = 0
+let previewRequestId = 0
+
 const durationOptions = [
   { label: 'Later today', value: 6 * 60 * 60 * 1000 },
   { label: 'Tomorrow', value: 24 * 60 * 60 * 1000 },
@@ -62,7 +79,136 @@ const sessionElapsedMinutes = computed(() => {
   return Math.round((Date.now() - startedAt.value) / 60000)
 })
 
-const currentTrackMeta = computed(() => (currentTrack.value ? getDemoTrackMeta(currentTrack.value) : null))
+function buildDemoMetadata(trackId: string): CachedTrackMetadata | null {
+  const demo = getDemoTrackMeta(trackId)
+  if (!demo) return null
+  return {
+    trackId,
+    title: demo.title,
+    artist: demo.artist,
+    available: demo.available,
+    tempo: typeof demo.tempo === 'number' ? demo.tempo : null,
+    energy: typeof demo.energy === 'number' ? demo.energy : null,
+    valence: typeof demo.valence === 'number' ? demo.valence : null,
+    album: undefined,
+    source: 'demo'
+  }
+}
+
+function cacheMetadata(records: TrackMetadata[], sourceOverride?: 'api' | 'demo') {
+  if (!records.length) return
+  const next = { ...trackMetadata.value }
+  for (const record of records) {
+    if (!record.trackId) continue
+    const source = sourceOverride ?? (record.source === 'api' ? 'api' : 'demo')
+    next[record.trackId] = {
+      trackId: record.trackId,
+      title: record.title ?? record.trackId,
+      artist: record.artist ?? 'Unknown artist',
+      available: record.available,
+      tempo: typeof record.tempo === 'number' ? record.tempo : null,
+      energy: typeof record.energy === 'number' ? record.energy : null,
+      valence: typeof record.valence === 'number' ? record.valence : null,
+      album: record.album,
+      source
+    }
+  }
+  trackMetadata.value = next
+}
+
+async function ensureMetadata(trackIds: string[]) {
+  const uniqueIds = Array.from(new Set(trackIds.filter(Boolean)))
+  if (!uniqueIds.length) return
+
+  const missing = uniqueIds.filter((id) => {
+    const cached = trackMetadata.value[id]
+    if (!cached) return true
+    if (cached.source !== 'api') return true
+    const hasAudioFeatures = typeof cached.tempo === 'number' && typeof cached.energy === 'number' && typeof cached.valence === 'number'
+    return !hasAudioFeatures
+  })
+
+  if (!missing.length) {
+    return
+  }
+
+  const requestId = ++metadataRequestId
+
+  try {
+    const records = await getTracks(missing)
+    if (requestId !== metadataRequestId) return
+    cacheMetadata(records, 'api')
+  } catch (error) {
+    if (requestId !== metadataRequestId) return
+    const fallbacks = missing
+      .map(buildDemoMetadata)
+      .filter((item): item is CachedTrackMetadata => item !== null)
+    cacheMetadata(fallbacks, 'demo')
+  }
+}
+
+// Ensure resurfacing scores/lastPlayed for the provided queue using TrackScoring.preview.
+// This works even when the queue was pre-seeded from outside (not via loadMixedQueue).
+async function ensurePreviewForQueue(trackIds: string[]) {
+  const uniqueIds = Array.from(new Set(trackIds.filter(Boolean)))
+  if (!uniqueIds.length || !form.userId?.trim()) return
+
+  // Only fetch if there are tracks missing in the index
+  const missing = uniqueIds.filter((id) => !previewIndex.value[id])
+  if (!missing.length) return
+
+  const requestId = ++previewRequestId
+  try {
+    // Best-effort ingest to ensure scores exist
+    try {
+      await ingestFromLibrary(form.userId.trim())
+    } catch {
+      // ignore; continue with preview either way
+    }
+
+    const size = Math.max(uniqueIds.length, 50)
+    const preview = await getPreview(form.userId.trim(), size)
+
+    if (requestId !== previewRequestId) return
+
+    const index: Record<string, { score?: number; lastPlayedAt?: number }> = { ...previewIndex.value }
+
+    // Prefer detailed response (.tracks); fall back to trackIds-only
+    if (Array.isArray((preview as any).tracks)) {
+      for (const t of (preview as any).tracks) {
+        if (t && typeof t.trackId === 'string') {
+          index[t.trackId] = {
+            score: typeof t.score === 'number' ? t.score : undefined,
+            lastPlayedAt: typeof t.lastPlayedAt === 'number' ? t.lastPlayedAt : undefined
+          }
+        }
+      }
+    } else if (Array.isArray(preview.trackIds)) {
+      for (const id of preview.trackIds) {
+        if (typeof id === 'string' && !(id in index)) {
+          index[id] = {}
+        }
+      }
+    }
+
+    previewIndex.value = index
+  } catch {
+    // Silent failure; scores are optional for UI rendering
+  }
+}
+
+function describeTracks(trackIds: string[], limit = 5): string[] {
+  return trackIds.slice(0, limit).map((trackId) => {
+    const meta = trackMetadata.value[trackId] ?? buildDemoMetadata(trackId)
+    if (!meta) return trackId
+    return `${meta.title} — ${meta.artist}`
+  })
+}
+
+const currentTrackMeta = computed(() => {
+  if (!currentTrack.value) return null
+  return trackMetadata.value[currentTrack.value] ?? buildDemoMetadata(currentTrack.value)
+})
 
 const currentTrackTitle = computed(
   () => currentTrackMeta.value?.title ?? spotifyEmbedMeta.title ?? currentTrack.value ?? ''
@@ -84,13 +230,56 @@ const trackInitials = computed(() => {
   return initials || titleSource.slice(0, 2).toUpperCase()
 })
 
+function toPercent(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return null
+  }
+  if (value > 1) {
+    return Math.round(value)
+  }
+  return Math.round(value * 100)
+}
+
 const trackStats = computed(() => {
-  if (!currentTrackMeta.value) return null
+  const meta = currentTrackMeta.value
+  if (!meta) return null
+
+  const tempo = typeof meta.tempo === 'number' && !Number.isNaN(meta.tempo) ? Math.round(meta.tempo) : null
+  const energy = toPercent(meta.energy)
+  const valence = toPercent(meta.valence)
+  const available = typeof meta.available === 'boolean' ? meta.available : null
+
+  if (tempo === null && energy === null && valence === null && available === null) {
+    return null
+  }
+
   return {
-    tempo: Math.round(currentTrackMeta.value.tempo),
-    energy: Math.round(currentTrackMeta.value.energy * 100),
-    valence: Math.round(currentTrackMeta.value.valence * 100),
-    available: currentTrackMeta.value.available
+    tempo,
+    energy,
+    valence,
+    available
+  }
+})
+
+// Score and last played from TrackScoring preview (when available)
+const currentPreviewEntry = computed(() => (currentTrack.value ? previewIndex.value[currentTrack.value] : undefined))
+
+const currentScore = computed(() =>
+  typeof currentPreviewEntry.value?.score === 'number' ? Math.round(currentPreviewEntry.value.score) : null
+)
+
+function toMs(ts?: number) {
+  if (typeof ts !== 'number' || Number.isNaN(ts)) return undefined
+  return ts > 1_000_000_000_000 ? ts : ts * 1000
+}
+
+const currentLastPlayed = computed(() => {
+  const ms = toMs(currentPreviewEntry.value?.lastPlayedAt)
+  if (!ms) return null
+  const d = new Date(ms)
+  return {
+    absolute: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
+    relative: formatRelativeToNow(d)
   }
 })
 
@@ -238,58 +427,88 @@ watch(parsedQueueTracks, (tracks) => {
   }
 })
 
-async function loadLikedQueue() {
+watch(parsedQueueTracks, (tracks) => {
+  void ensureMetadata(tracks)
+  void ensurePreviewForQueue(tracks)
+}, { immediate: true })
+
+watch(currentTrack, (trackId) => {
+  if (trackId) {
+    void ensureMetadata([trackId])
+    void ensurePreviewForQueue([trackId])
+  }
+})
+
+async function loadAndRankTracks() {
   likesError.value = null
   likesPulledCount.value = null
-  likesSource.value = null
   likesPreview.value = []
 
   const trimmedUserId = form.userId.trim()
   if (!trimmedUserId) {
-    likesError.value = 'Enter a user ID to pull liked tracks.'
+    likesError.value = 'Enter a user ID to load tracks.'
     return
   }
 
   likesLoading.value = true
-
   try {
-    const likedResult = await getLikedTracks(trimmedUserId)
-    const likedTracks = likedResult.trackIds
-    likesSource.value = likedResult.source
-
-    if (!likedTracks.length) {
-      form.queueText = ''
-      likesError.value = `No liked tracks found for ${trimmedUserId}.`
-      likesSource.value = null
-      likesPreview.value = []
-      return
+    // Step 1: Ensure scores exist by triggering ingest
+    try {
+      await ingestFromLibrary(trimmedUserId)
+    } catch (ingestErr) {
+      console.warn('TrackScoring ingest may have failed; continuing with preview.', ingestErr)
     }
 
     const preferredSize = requestedSize.value || DEFAULT_SIZE
-    const selected = likedTracks.slice(0, Math.max(preferredSize, 1))
-    form.queueText = selected.join('\n')
-    likesPulledCount.value = selected.length
 
-    if (likedResult.source === 'offline-demo') {
-      likesPreview.value = selected.slice(0, 5).map((trackId) => {
-        const meta = getDemoTrackMeta(trackId)
-        return meta ? `${meta.title} — ${meta.artist}` : trackId
-      })
-    } else {
-      likesPreview.value = []
+    // Step 2: Fetch top-scored tracks
+    const preview = await getPreview(trimmedUserId, preferredSize)
+
+    const trackIds = Array.isArray(preview.trackIds) && preview.trackIds.length
+      ? preview.trackIds
+      : Array.isArray((preview as any).tracks)
+        ? (preview as any).tracks.map((t: any) => t.trackId).filter((x: any) => typeof x === 'string')
+        : []
+
+    // Build index for per-track score/lastPlayed
+    const index: Record<string, { score?: number; lastPlayedAt?: number }> = {}
+    if (Array.isArray((preview as any).tracks)) {
+      for (const t of (preview as any).tracks) {
+        if (t && typeof t.trackId === 'string') {
+          index[t.trackId] = { score: typeof t.score === 'number' ? t.score : undefined, lastPlayedAt: t.lastPlayedAt }
+        }
+      }
     }
 
-    if (form.size > selected.length) {
-      form.size = selected.length
+    // Step 3: If preview didn't return enough, supplement with liked tracks
+    let finalTracks = trackIds.slice(0, preferredSize)
+    
+    if (finalTracks.length < preferredSize) {
+      const likedResult = await getLikedTracks(trimmedUserId)
+      likesSource.value = likedResult.source
+      const existingSet = new Set(finalTracks)
+      const additional = likedResult.trackIds
+        .filter(id => !existingSet.has(id))
+        .slice(0, preferredSize - finalTracks.length)
+      finalTracks = [...finalTracks, ...additional]
+    }
+
+    await ensureMetadata(finalTracks)
+
+    form.queueText = finalTracks.join('\n')
+    likesPulledCount.value = finalTracks.length
+    previewIndex.value = index
+    likesPreview.value = describeTracks(finalTracks)
+
+    if (form.size > finalTracks.length) {
+      form.size = finalTracks.length
     }
   } catch (err) {
-    likesError.value = err instanceof Error ? err.message : 'Unable to load liked tracks.'
-    likesPreview.value = []
+    likesError.value = err instanceof Error ? err.message : 'Unable to load tracks.'
   } finally {
     likesLoading.value = false
   }
 }
-
 function applySessionMode(mode?: unknown) {
   if (mode !== 'offline' && mode !== 'shadow') return
   sessionMode.value = mode
@@ -494,25 +713,36 @@ async function handleEndSession() {
               Choose what to do with this track: keep it active, snooze it to review later, or add it to a playlist.
             </p>
             <p v-if="currentTrackMeta" class="track-id-hint">Track ID • {{ currentTrack }}</p>
-            <p v-if="trackAddedAt" class="track-liked">Liked {{ trackAddedAt.relative }} · <span>{{ trackAddedAt.absolute }}</span></p>
-            <ul v-if="trackStats" class="track-stats">
-              <li class="track-stat">
-                <span class="track-stat__label">Tempo</span>
-                <strong class="track-stat__value">{{ trackStats.tempo }} BPM</strong>
+            <ul v-if="currentScore !== null || currentLastPlayed || trackAddedAt || trackStats" class="track-stats">
+              <li v-if="currentScore !== null" class="track-stat">
+                <span class="track-stat__label">Resurfacing score</span>
+                <strong class="track-stat__value">{{ currentScore }}</strong>
               </li>
-              <li class="track-stat">
-                <span class="track-stat__label">Energy</span>
-                <strong class="track-stat__value">{{ trackStats.energy }}%</strong>
+              <li v-if="currentLastPlayed" class="track-stat">
+                <span class="track-stat__label">Last played</span>
+                <strong class="track-stat__value">{{ currentLastPlayed.relative }} · {{ currentLastPlayed.absolute }}</strong>
               </li>
-              <li class="track-stat">
-                <span class="track-stat__label">Valence</span>
-                <strong class="track-stat__value">{{ trackStats.valence }}%</strong>
+              <li v-if="trackAddedAt" class="track-stat">
+                <span class="track-stat__label">Liked date</span>
+                <strong class="track-stat__value">{{ trackAddedAt.relative }} · {{ trackAddedAt.absolute }}</strong>
               </li>
-              <li class="track-stat">
+              <li v-if="trackStats && trackStats.available !== null" class="track-stat">
                 <span class="track-stat__label">Availability</span>
                 <strong class="track-stat__value" :class="{ 'track-stat__value--warning': !trackStats.available }">
                   {{ trackStats.available ? 'Streaming' : 'Unavailable' }}
                 </strong>
+              </li>
+              <li v-if="trackStats && trackStats.tempo !== null" class="track-stat">
+                <span class="track-stat__label">Tempo</span>
+                <strong class="track-stat__value">{{ trackStats.tempo }} BPM</strong>
+              </li>
+              <li v-if="trackStats && trackStats.energy !== null" class="track-stat">
+                <span class="track-stat__label">Energy</span>
+                <strong class="track-stat__value">{{ trackStats.energy }}%</strong>
+              </li>
+              <li v-if="trackStats && trackStats.valence !== null" class="track-stat">
+                <span class="track-stat__label">Valence</span>
+                <strong class="track-stat__value">{{ trackStats.valence }}%</strong>
               </li>
             </ul>
           </div>
@@ -565,10 +795,6 @@ async function handleEndSession() {
       </div>
       <form class="launch-form" @submit.prevent="startNewSession">
         <label>
-          <span>User ID</span>
-          <input v-model="form.userId" type="text" placeholder="Enter your user ID" required />
-        </label>
-        <label>
           <span>Number of tracks</span>
           <input v-model.number="form.size" min="1" type="number" placeholder="How many tracks?" />
         </label>
@@ -581,13 +807,13 @@ async function handleEndSession() {
           />
         </label>
         <div class="likes-actions">
-          <button type="button" :disabled="likesLoading || !form.userId.trim()" @click="loadLikedQueue">
-            <span v-if="likesLoading">Loading…</span>
-            <span v-else>Load from liked songs</span>
+          <button type="button" :disabled="likesLoading || !form.userId.trim()" @click="loadAndRankTracks">
+            <span v-if="likesLoading">Loading tracks…</span>
+            <span v-else>Load tracks</span>
           </button>
           <p v-if="likesError" class="likes-status likes-status--error">{{ likesError }}</p>
           <p v-else-if="likesPulledCount !== null" class="likes-status">
-            Loaded {{ likesPulledCount }} tracks.
+            Loaded {{ likesPulledCount }} track{{ likesPulledCount === 1 ? '' : 's' }}.
           </p>
         </div>
         <div v-if="likesPreview.length" class="likes-preview">
