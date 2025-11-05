@@ -2,51 +2,25 @@
 
 Resurfacer helps you rediscover forgotten tracks in your Spotify library. This is the frontend portion of the application.
 
-## Getting Started
+## Table Contents (4b Final)
+1. [User Journey Updated](userjourney.md)
 
-### Prerequisites
-- Node.js (v16 or higher)
-- npm or yarn
-- Backend server running on `localhost:8000` (see [Backend Repo](https://github.com/notyahir/resurfacer_4a))
+2. [Video](ResurfacerWalkthrough.mp4)
 
-### Installation
+3. [Video on Youtube](https://youtu.be/--Vr0t2kED4)
 
-1. Install dependencies:
-```bash
-npm install
-```
+4. [Visual Design Study](deliverables/visualdesignstudy.pdf)
 
-2. Start the development server:
-```bash
-npm run dev
-```
+5. [Backend Changes](https://github.com/notyahir/resurfacer_4a/blob/main/new_changes.md)
 
-The app will be available at `http://localhost:5173`
+### Frontend Things
 
-### Building for Production
+1. [Code Src](src/)
 
-```bash
-npm run build
-```
+2. [API spec](api-spec.md)
 
-## Important Notes
-
-### Backend Connection
-
-The frontend expects the backend to be running on `http://localhost:8000`. If you see errors about "no healthy upstream" or connection issues:
-
-1. Make sure the backend server is running
-2. Check that it's accessible at `http://localhost:8000`
-3. The frontend will automatically proxy API requests to `/api/*` to the backend
-
-### Development
-
-- The app uses Vue 3 with TypeScript
-- Vite for build tooling and development server
-- Spotify embeds for track previews
-
-## Table Contents
-1. [User Journey](userjourney.md)
+## Table Contents (4b Checkin)
+1. [User Journey](userjourney_checkpoint.md)
 
 2. [Video](ResurfacerFrontendWalkthroughCheckin.mkv)
 
