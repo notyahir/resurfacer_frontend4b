@@ -138,7 +138,9 @@ const SPOTIFY_SCOPES = [
 	'playlist-read-collaborative'
   ]
   const SPOTIFY_REDIRECT_PATH = '/callback'
-  const SPOTIFY_REDIRECT_HOST = '127.0.0.1:5173'
+  const SPOTIFY_REDIRECT_HOST = import.meta.env.PROD 
+    ? 'resurfacer.onrender.com' 
+    : '127.0.0.1:5173'
   const currentLink = ref<LinkHandle | null>(null)
 const playlistFindings = reactive({
 	duplicates: [] as PlaylistIssue[],
@@ -344,10 +346,10 @@ async function connectAccount() {
   connectError.value = null
   try {
     connectLoading.value = true
-    // Persist permissions before redirect
     sessionStorage.setItem(PERMISSIONS_STORAGE_KEY, JSON.stringify(enabledPermissions.value))
     
-    const redirectUri = `http://${SPOTIFY_REDIRECT_HOST}${SPOTIFY_REDIRECT_PATH}`
+    const protocol = import.meta.env.PROD ? 'https' : 'http'
+    const redirectUri = `${protocol}://${SPOTIFY_REDIRECT_HOST}${SPOTIFY_REDIRECT_PATH}`
     const { authorizeUrl, state } = await startAuth({
       userId: ACTIVE_USER_ID,
       platform: 'spotify',

@@ -18,6 +18,22 @@ The backend now uses synchronizations and requires authentication for API reques
 
 **Note:** Audio features (tempo, energy, valence) unavailable due to Spotify API deprecation (Nov 2024). Backend handles this gracefully by setting features to `null`.
 
+## Deployment
+
+**Production URLs:**
+- Frontend: `https://resurfacer.onrender.com`
+- Backend: `https://resurfacer-backend.onrender.com`
+
+**Environment Configuration:**
+- OAuth redirect automatically switches between dev and production
+- Dev: `http://127.0.0.1:5173/callback`
+- Production: `https://resurfacer.onrender.com/callback`
+
+**Render Setup:**
+1. Set `VITE_API_BASE_URL=https://resurfacer-backend.onrender.com/api` in frontend environment variables
+2. Update Spotify Developer Dashboard with production callback URL
+3. Backend environment variables set via `.env` upload
+
 ## UI/UX Polish (4b)
 
 **Playlist Health:**
