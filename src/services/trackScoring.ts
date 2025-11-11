@@ -1,10 +1,13 @@
 import { API_BASE_URL } from '../config'
+import { getSessionCredentials, isAuthError, handleAuthError } from './session'
 
 const TRACK_SCORING_BASE_PATHS = ['/api/TrackScoring', '/api/trackscoring', '/api/track-scoring']
 
 async function postJson<T>(methodName: string, body?: object): Promise<T> {
 	let lastError: unknown = null
 	const endpoint = methodName.startsWith('/') ? methodName : `/${methodName}`
+
+	const requestBody = { ...getSessionCredentials(), ...(body ?? {}) }
 
 	for (const base of TRACK_SCORING_BASE_PATHS) {
 		const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base
@@ -14,12 +17,18 @@ async function postJson<T>(methodName: string, body?: object): Promise<T> {
 			const response = await fetch(url, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body ?? {})
+				body: JSON.stringify(requestBody)
 			})
 
 			if (!response.ok) {
 				const text = await response.text()
-				throw new Error(text || `TrackScoring request failed (${response.status}) at ${endpoint}`)
+				const error = new Error(text || `TrackScoring request failed (${response.status}) at ${endpoint}`)
+				
+				if (isAuthError(error)) {
+					handleAuthError(error)
+				}
+				
+				throw error
 			}
 
 			const text = await response.text()
@@ -41,10 +50,6 @@ export interface BootstrapResult {
 	ensuredWeights?: boolean
 }
 
-/**
- * Ingests stats from LibraryCache to bootstrap TrackScoring for a user.
- * This is the first step after syncing a library.
- */
 export async function ingestFromLibrary(userId: string): Promise<BootstrapResult> {
 	return postJson('ingestFromLibraryCache', { userId })
 }
@@ -59,9 +64,6 @@ export interface PreviewResult {
 	source?: 'bootstrap' | 'scores' | 'empty'
 }
 
-/**
- * Get a preview of tracks recommended for resurfacing.
- */
 export async function getPreview(userId: string, size = 50): Promise<PreviewResult> {
 	return postJson<PreviewResult>('preview', { userId, size })
 }
@@ -73,9 +75,6 @@ export interface WeightsUpdate {
 	timesSkippedW: number
 }
 
-/**
- * Update scoring weights for a user.
- */
 export async function updateWeights(weights: WeightsUpdate): Promise<void> {
 	await postJson('updateWeights', weights)
 }
@@ -88,7 +87,6 @@ export async function snoozeTrack(userId: string, trackId: string, until?: numbe
 	await postJson('snooze', { userId, trackId, until })
 }
 
-// Compute score for a single track
 export async function scoreTrack(userId: string, trackId: string): Promise<number | null> {
 	try {
 		const result = await postJson<{ score?: number }>('score', { userId, trackId })
@@ -98,7 +96,6 @@ export async function scoreTrack(userId: string, trackId: string): Promise<numbe
 	}
 }
 
-// Batch helper: score many tracks with limited concurrency
 export async function getScoresForTracks(
 	userId: string,
 	trackIds: string[],

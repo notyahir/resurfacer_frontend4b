@@ -1,10 +1,15 @@
 import { API_BASE_URL } from '../config'
+import { getSessionCredentials, getSessionToken, isAuthError, handleAuthError } from './session'
 
 const PLAYLIST_HEALTH_BASE_PATHS = ['/api/PlaylistHealth', '/api/playlisthealth', '/api/playlist-health']
 
-async function postJson<T>(endpoint: string, body: object): Promise<T> {
+async function postJson<T>(endpoint: string, body: object, onlyToken = false): Promise<T> {
 	let lastError: unknown = null
 	const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`
+
+	const requestBody = onlyToken 
+		? { sessionToken: getSessionToken(), ...body }
+		: { ...getSessionCredentials(), ...body }
 
 	for (const base of PLAYLIST_HEALTH_BASE_PATHS) {
 		const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base
@@ -14,12 +19,18 @@ async function postJson<T>(endpoint: string, body: object): Promise<T> {
 			const response = await fetch(url, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body)
+				body: JSON.stringify(requestBody)
 			})
 
 			if (!response.ok) {
 				const payload = await response.text()
-				throw new Error(payload || `PlaylistHealth request failed (${response.status}) at ${normalizedEndpoint}`)
+				const error = new Error(payload || `PlaylistHealth request failed (${response.status}) at ${normalizedEndpoint}`)
+				
+				if (isAuthError(error)) {
+					handleAuthError(error)
+				}
+				
+				throw error
 			}
 
 			const text = await response.text()
@@ -60,7 +71,7 @@ export interface AnalyzeResponse {
 }
 
 export async function analyzeSnapshot(payload: AnalyzeRequest) {
-	return postJson<AnalyzeResponse>('analyze', payload)
+	return postJson<AnalyzeResponse>('analyze', payload, true)
 }
 
 export type PlaylistIssueKind = 'Duplicate' | 'Unavailable' | 'Outlier'

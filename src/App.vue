@@ -1002,12 +1002,6 @@ watch(
           Playlist Surgery
         </button>
       </nav>
-      <nav class="sidebar__nav">
-        <span class="sidebar__section">Library</span>
-        <span class="sidebar__ghost">Liked tracks</span>
-        <span class="sidebar__ghost">Recently added</span>
-        <span class="sidebar__ghost">Archived</span>
-      </nav>
       <div class="sidebar__footer">
         <p>Connected to backend at <span class="accent">{{ apiBaseDisplay }}</span></p>
       </div>
@@ -1050,11 +1044,11 @@ watch(
             </ul>
             <div class="connect-status" role="status">
               <p>
-                <strong>Library sync:</strong>
+                <strong>Library sync</strong>
                 <span>{{ librarySyncing ? 'Syncing…' : lastSyncSummary ?? 'Not synced yet' }}</span>
               </p>
               <p>
-                <strong>Liked tracks:</strong>
+                <strong>Liked tracks</strong>
                 <span>{{ likedTracksSourceLabel }}</span>
               </p>
               <p v-if="likedTracksLoading" class="connect-status__hint">Loading liked tracks…</p>
@@ -1139,23 +1133,23 @@ watch(
         <section class="ai-preview">
           <div class="ai-preview__header">
             <span class="ai-preview__badge">Coming soon</span>
-            <h2>Smart Suggestions</h2>
+            <h2>AI-Augmented Features</h2>
             <p>
-              We're building features to help you discover patterns and maintain your library more easily.
+              We're building intelligent features to enhance each flow with smart insights and recommendations.
             </p>
           </div>
           <ul class="ai-preview__list">
             <li>
-              <strong>Listening insights</strong>
-              <p>See what's changed in your listening habits over time.</p>
+              <strong>Smart Time-Capsule curation</strong>
+              <p>AI-powered track selection based on your listening patterns and mood.</p>
             </li>
             <li>
-              <strong>Playlist health checks</strong>
-              <p>Identify duplicates, unavailable tracks, and inconsistencies.</p>
+              <strong>Intelligent Swipe suggestions</strong>
+              <p>Get AI recommendations on which tracks to keep, snooze, or remove.</p>
             </li>
             <li>
-              <strong>Personalized recommendations</strong>
-              <p>Get suggestions based on your listening preferences.</p>
+              <strong>Advanced Playlist Health analysis</strong>
+              <p>AI detection of mood shifts, genre mixing, and energy flow issues.</p>
             </li>
           </ul>
         </section>
@@ -1314,62 +1308,95 @@ watch(
       </template>
 
       <template v-else-if="stage === 'playlist'">
-        <section class="playlist-report">
-          <header class="playlist-report__header">
+        <div class="playlist-header-card">
+          <div class="playlist-header-content">
             <div>
-              <h2>Playlist issues</h2>
+              <h2>Playlist Health</h2>
               <p>Review and fix any problems found in your playlists.</p>
             </div>
-            <div class="playlist-report__controls">
-              <span v-if="playlistSourceLabel" class="playlist-report__badge">{{ playlistSourceLabel }}</span>
-              <button :disabled="playlistStatus === 'loading'" type="button" @click="refreshPlaylistHealth">
-                {{ playlistStatus === 'loading' ? 'Analyzing…' : 'Rescan' }}
+            <div class="playlist-header-controls">
+              <span v-if="playlistSourceLabel" class="playlist-source-badge">{{ playlistSourceLabel }}</span>
+              <button 
+                class="playlist-rescan-btn"
+                :disabled="playlistStatus === 'loading'" 
+                type="button" 
+                @click="refreshPlaylistHealth"
+              >
+                <span v-if="playlistStatus === 'loading'" class="refresh-button__spinner" />
+                <span>{{ playlistStatus === 'loading' ? 'Analyzing…' : 'Rescan' }}</span>
               </button>
             </div>
-          </header>
+          </div>
+        </div>
 
-          <div v-if="playlistStatus === 'loading'" class="playlist-report__state">Analyzing playlist…</div>
+        <section class="playlist-report">
+          <div v-if="playlistStatus === 'loading'" class="playlist-report__state">
+            <div class="loading-spinner-large" />
+            <p>Analyzing playlist health…</p>
+          </div>
           <template v-else>
             <div v-if="playlistStatus === 'error'" class="playlist-report__state playlist-report__state--error">
               <p>{{ playlistError ?? 'Unable to analyze playlist.' }}</p>
               <button type="button" class="retry-button" @click="refreshPlaylistHealth">Try again</button>
             </div>
-            <div v-if="playlistHasFindings" class="report-columns">
-            <div>
-              <h3>Duplicates</h3>
-              <ul>
-                <li v-for="item in playlistFindings.duplicates" :key="item.trackId">
-                  <strong>{{ item.track }}</strong>
-                  <p>{{ item.note }}</p>
-                  <button type="button">Remove duplicate</button>
-                </li>
-                <li v-if="!playlistFindings.duplicates.length" class="report-empty">No duplicates found.</li>
-              </ul>
+            <div v-else-if="playlistHasFindings" class="report-columns">
+              <div class="report-column">
+                <div class="report-column-header">
+                  <span class="report-icon">📋</span>
+                  <h3>Duplicates</h3>
+                  <span class="report-count">{{ playlistFindings.duplicates.length }}</span>
+                </div>
+                <ul class="report-list">
+                  <li v-for="item in playlistFindings.duplicates" :key="item.trackId" class="report-item">
+                    <strong class="report-item__track">{{ item.track }}</strong>
+                    <p class="report-item__note">{{ item.note }}</p>
+                    <button type="button" class="report-item__action">Remove duplicate</button>
+                  </li>
+                  <li v-if="!playlistFindings.duplicates.length" class="report-empty">
+                    <span>✓</span> No duplicates found
+                  </li>
+                </ul>
+              </div>
+              <div class="report-column">
+                <div class="report-column-header">
+                  <span class="report-icon">❌</span>
+                  <h3>Unavailable</h3>
+                  <span class="report-count">{{ playlistFindings.unavailable.length }}</span>
+                </div>
+                <ul class="report-list">
+                  <li v-for="item in playlistFindings.unavailable" :key="item.trackId" class="report-item">
+                    <strong class="report-item__track">{{ item.track }}</strong>
+                    <p class="report-item__note">{{ item.note }}</p>
+                    <button type="button" class="report-item__action">Find alternative</button>
+                  </li>
+                  <li v-if="!playlistFindings.unavailable.length" class="report-empty">
+                    <span>✓</span> All tracks available
+                  </li>
+                </ul>
+              </div>
+              <div class="report-column">
+                <div class="report-column-header">
+                  <span class="report-icon">🎭</span>
+                  <h3>Mood outliers</h3>
+                  <span class="report-count">{{ playlistFindings.outliers.length }}</span>
+                </div>
+                <ul class="report-list">
+                  <li v-for="item in playlistFindings.outliers" :key="item.trackId" class="report-item">
+                    <strong class="report-item__track">{{ item.track }}</strong>
+                    <p class="report-item__note">{{ item.note }}</p>
+                    <button type="button" class="report-item__action">Tag for review</button>
+                  </li>
+                  <li v-if="!playlistFindings.outliers.length" class="report-empty">
+                    <span>✓</span> No mood outliers detected
+                  </li>
+                </ul>
+              </div>
             </div>
-            <div>
-              <h3>Unavailable</h3>
-              <ul>
-                <li v-for="item in playlistFindings.unavailable" :key="item.trackId">
-                  <strong>{{ item.track }}</strong>
-                  <p>{{ item.note }}</p>
-                  <button type="button">Swap source</button>
-                </li>
-                <li v-if="!playlistFindings.unavailable.length" class="report-empty">All tracks available.</li>
-              </ul>
+            <div v-else class="playlist-report__success">
+              <div class="success-icon">✓</div>
+              <h3>All clear!</h3>
+              <p>No issues detected. Your playlist is in great shape.</p>
             </div>
-            <div>
-              <h3>Mood outliers</h3>
-              <ul>
-                <li v-for="item in playlistFindings.outliers" :key="item.trackId">
-                  <strong>{{ item.track }}</strong>
-                  <p>{{ item.note }}</p>
-                  <button type="button">Tag for review</button>
-                </li>
-                <li v-if="!playlistFindings.outliers.length" class="report-empty">No mood outliers detected.</li>
-              </ul>
-            </div>
-            </div>
-            <div v-else class="playlist-report__state">No issues detected. You're all set!</div>
           </template>
         </section>
       </template>
@@ -1395,18 +1422,21 @@ watch(
   background: linear-gradient(200deg, rgba(10, 10, 10, 0.92), rgba(6, 6, 6, 0.82));
   border-right: 1px solid var(--spotify-border);
   backdrop-filter: blur(18px);
+  overflow: hidden;
 }
 
 .sidebar__brand {
   display: flex;
   align-items: center;
   gap: 0.85rem;
+  overflow: hidden;
 }
 
 .brand-lockup {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
+  overflow: hidden;
 }
 
 .brand-word {
@@ -1422,6 +1452,7 @@ watch(
 .brand-word--animated {
   position: relative;
   display: inline-block;
+  overflow: hidden;
 }
 
 .brand-word--animated::after {
@@ -1489,14 +1520,6 @@ watch(
   color: var(--spotify-text-muted);
 }
 
-.sidebar__ghost {
-  padding: 0.4rem 0.75rem;
-  border-radius: 6px;
-  color: var(--spotify-text-muted);
-  background: rgba(255, 255, 255, 0.05);
-  font-size: 0.85rem;
-}
-
 .sidebar__footer {
   margin-top: auto;
   font-size: 0.8rem;
@@ -1523,13 +1546,16 @@ watch(
 }
 
 .hero {
-  padding: 2.5rem;
-  border-radius: 22px;
-  background: radial-gradient(circle at 8% 4%, rgba(180, 155, 255, 0.3), transparent 60%),
+  padding: 2rem;
+  border-radius: 20px;
+  background: radial-gradient(circle at 8% 4%, rgba(180, 155, 255, 0.28), transparent 60%),
     linear-gradient(135deg, rgba(29, 185, 84, 0.96), rgba(12, 12, 12, 0.92));
   color: var(--spotify-text);
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.35);
   max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .hero--compact {
@@ -1541,28 +1567,34 @@ watch(
 .hero--wide {
   width: 100%;
   max-width: none;
-  align-self: stretch;
+  padding: 2.5rem;
 }
 
 .content--flow > .hero {
   grid-column: 2;
   grid-row: 1;
   justify-self: stretch;
+  align-self: stretch;
   max-width: none;
   width: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .content--flow > .flow-plan,
 .content--flow > .timecapsule-summary,
-.content--flow > .playlist-report {
+.content--flow > .playlist-header-card {
   grid-column: 1;
   grid-row: 1;
   min-width: 0;
   align-self: stretch;
+  display: flex;
+  flex-direction: column;
 }
 
 .content--flow > .flow-session,
-.content--flow > .timecapsule-detail {
+.content--flow > .timecapsule-detail,
+.content--flow > .playlist-report {
   grid-column: 1 / -1;
   grid-row: 2;
   min-width: 0;
@@ -1572,24 +1604,37 @@ watch(
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.35rem 0.75rem;
+  padding: 0.35rem 0.85rem;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.35);
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  font-weight: 500;
 }
 
 .hero h1 {
-  margin: 1.2rem 0 0.6rem;
-  font-size: 2.75rem;
+  margin: 1rem 0 0.5rem;
+  font-size: 2.5rem;
   font-weight: 700;
+  line-height: 1.2;
+}
+
+.hero--compact h1 {
+  font-size: 2.2rem;
+  margin: 0.85rem 0 0.4rem;
 }
 
 .hero p {
-  margin: 0 0 1.6rem;
+  margin: 0 0 1.4rem;
   max-width: 46ch;
   color: var(--spotify-text-soft);
+  line-height: 1.6;
+}
+
+.hero--compact p {
+  margin: 0 0 1.2rem;
+  font-size: 0.95rem;
 }
 
 .hero__actions {
@@ -1631,28 +1676,41 @@ watch(
 
 .insights {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.25rem;
 }
 
 .insight {
-  padding: 1.5rem;
-  border-radius: 16px;
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(18, 18, 18, 0.9));
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  padding: 1.75rem;
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(24, 24, 24, 0.95), rgba(12, 12, 12, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(14px);
+  transition: all 0.3s ease;
+}
+
+.insight:hover {
+  transform: translateY(-4px);
+  border-color: rgba(29, 185, 84, 0.3);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.3);
 }
 
 .insight__value {
   display: block;
-  font-size: 1.8rem;
-  font-weight: 600;
+  font-size: 2rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--spotify-green-bright), var(--spotify-green));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .insight__label {
-  margin-top: 0.5rem;
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.6);
+  display: block;
+  margin-top: 0.6rem;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.65);
+  line-height: 1.4;
 }
 
 .connect-layout {
@@ -1671,28 +1729,31 @@ watch(
 .connect-permissions,
 .story-panel--connect {
   padding: 2rem;
-  border-radius: 22px;
-  background: rgba(12, 12, 12, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 0 30px 50px rgba(0, 0, 0, 0.35);
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(24, 24, 24, 0.95), rgba(12, 12, 12, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 22px 40px rgba(0, 0, 0, 0.3);
 }
 
 .connect-prep h3 {
   margin-top: 0;
+  font-size: 1.3rem;
 }
 
 .connect-prep p {
-  color: rgba(255, 255, 255, 0.62);
+  color: rgba(255, 255, 255, 0.7);
   margin-bottom: 1rem;
+  line-height: 1.6;
 }
 
 .connect-prep ul {
-  margin: 0;
-  padding-left: 1.1rem;
+  margin: 0 0 1.5rem;
+  padding-left: 1.3rem;
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
-  color: rgba(255, 255, 255, 0.62);
+  gap: 0.5rem;
+  color: rgba(255, 255, 255, 0.65);
+  line-height: 1.6;
 }
 
 .connect-status {
@@ -1727,10 +1788,16 @@ watch(
   gap: 2rem;
 }
 
-.connect-permissions h2,
-.connect-permissions p {
+.connect-permissions h2 {
   margin-top: 0;
-  color: rgba(255, 255, 255, 0.62);
+  margin-bottom: 0.5rem;
+  font-size: 1.5rem;
+}
+
+.connect-permissions > p {
+  margin: 0 0 1.5rem;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
 }
 
 .permission-list {
@@ -1745,52 +1812,70 @@ watch(
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 1rem;
-  padding: 1rem 1.2rem;
+  padding: 1.2rem 1.4rem;
   border-radius: 16px;
-  background: rgba(24, 24, 24, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(24, 24, 24, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   color: inherit;
   cursor: pointer;
-  transition: border-color 0.2s ease, transform 0.2s ease;
+  transition: all 0.2s ease;
 }
 
 .permission-toggle:hover {
-  border-color: rgba(29, 185, 84, 0.35);
+  border-color: rgba(29, 185, 84, 0.4);
+  background: rgba(24, 24, 24, 0.95);
   transform: translateY(-2px);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.25);
 }
 
 .permission-toggle--active {
-  border-color: rgba(29, 185, 84, 0.55);
-  background: rgba(29, 185, 84, 0.15);
+  border-color: rgba(29, 185, 84, 0.5);
+  background: rgba(29, 185, 84, 0.12);
+}
+
+.permission-toggle--active:hover {
+  border-color: rgba(29, 185, 84, 0.6);
+  background: rgba(29, 185, 84, 0.18);
 }
 
 .permission-toggle__indicator {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  transition: all 0.2s ease;
 }
 
 .permission-toggle--active .permission-toggle__indicator {
   background: var(--spotify-green);
+  border-color: var(--spotify-green);
   box-shadow: 0 0 12px rgba(29, 185, 84, 0.6);
 }
 
 .permission-toggle__copy strong {
   display: block;
-  margin-bottom: 0.3rem;
+  margin-bottom: 0.35rem;
+  font-size: 1.05rem;
 }
 
 .permission-toggle__copy p {
   margin: 0;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
 
 .permission-toggle__state {
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  font-weight: 500;
+}
+
+.permission-toggle--active .permission-toggle__state {
+  color: var(--spotify-green-bright);
 }
 
 .connect-inline-actions {
@@ -1832,99 +1917,149 @@ watch(
 
 .journey-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.75rem;
 }
 
 .journey-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding: 1.8rem;
+  padding: 2rem;
   border-radius: 20px;
-  background: var(--spotify-charcoal);
-  border: 1px solid var(--spotify-border);
+  background: linear-gradient(145deg, rgba(24, 24, 24, 0.95), rgba(12, 12, 12, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 22px 36px rgba(0, 0, 0, 0.28);
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+
+.journey-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, var(--spotify-green), var(--spotify-green-bright));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.journey-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(29, 185, 84, 0.3);
+  box-shadow: 0 28px 48px rgba(0, 0, 0, 0.4);
+}
+
+.journey-card:hover::before {
+  opacity: 1;
 }
 
 .journey-card h2 {
   margin: 0;
-  font-size: 1.3rem;
+  font-size: 1.4rem;
+  background: linear-gradient(135deg, #fff, rgba(255, 255, 255, 0.85));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .journey-card p {
   margin: 0;
-  color: rgba(255, 255, 255, 0.65);
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
 }
 
 .journey-card__detail {
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.45);
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  background: rgba(29, 185, 84, 0.15);
+  border: 1px solid rgba(29, 185, 84, 0.25);
+  color: var(--spotify-green-bright);
+  font-size: 0.8rem;
+  font-weight: 500;
+  align-self: flex-start;
+  margin-top: 0.5rem;
 }
 
 .journey-card button {
   align-self: flex-start;
-  padding: 0.65rem 1.4rem;
+  padding: 0.7rem 1.5rem;
+  margin-top: 0.5rem;
   border-radius: 999px;
   border: none;
   background: linear-gradient(135deg, var(--spotify-green), var(--spotify-green-bright));
   color: var(--spotify-black);
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: all 0.2s ease;
 }
 
-.journey-card button:hover {
+.journey-card button:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 14px 24px rgba(29, 185, 84, 0.3);
+  box-shadow: 0 12px 24px rgba(29, 185, 84, 0.4);
 }
 
 .journey-card button:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .journey-card__locked {
-  margin: 0;
+  margin: 0.5rem 0 0;
   font-size: 0.8rem;
-  color: var(--spotify-text-muted);
+  color: rgba(255, 99, 71, 0.8);
+  font-style: italic;
 }
 
 .ai-preview {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 2rem;
   padding: 2rem;
-  border-radius: 22px;
-  background: rgba(12, 12, 12, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 0 26px 44px rgba(0, 0, 0, 0.32);
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(24, 24, 24, 0.95), rgba(12, 12, 12, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 22px 40px rgba(0, 0, 0, 0.3);
 }
 
 .ai-preview__header {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.85rem;
 }
 
 .ai-preview__badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.3rem 0.9rem;
+  gap: 0.4rem;
+  padding: 0.35rem 1rem;
   border-radius: 999px;
-  background: rgba(180, 155, 255, 0.2);
-  color: rgba(180, 155, 255, 0.92);
+  background: rgba(180, 155, 255, 0.18);
+  border: 1px solid rgba(180, 155, 255, 0.3);
+  color: rgba(180, 155, 255, 0.95);
   font-size: 0.75rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  font-weight: 500;
+  align-self: flex-start;
+}
+
+.ai-preview__header h2 {
+  margin: 0;
+  font-size: 1.5rem;
 }
 
 .ai-preview__header p {
   margin: 0;
-  color: rgba(255, 255, 255, 0.62);
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
 }
 
 .ai-preview__list {
@@ -1933,25 +2068,34 @@ watch(
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.25rem;
 }
 
 .ai-preview__list li {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
-  padding: 1rem;
+  padding: 1.25rem;
+  transition: all 0.2s ease;
+}
+
+.ai-preview__list li:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(180, 155, 255, 0.3);
+  transform: translateY(-2px);
 }
 
 .ai-preview__list strong {
   display: block;
-  margin-bottom: 0.35rem;
-  font-size: 1rem;
+  margin-bottom: 0.4rem;
+  font-size: 1.05rem;
+  color: #fff;
 }
 
 .ai-preview__list p {
   margin: 0;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.5;
 }
 
 @keyframes brand-glisten {
@@ -1980,19 +2124,21 @@ watch(
 
 .story-panel {
   padding: 2rem;
-  border-radius: 22px;
-  background: rgba(12, 12, 12, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 0 28px 44px rgba(0, 0, 0, 0.3);
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(24, 24, 24, 0.95), rgba(12, 12, 12, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 22px 40px rgba(0, 0, 0, 0.3);
 }
 
 .story-panel header h2 {
-  margin: 0 0 0.4rem;
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
 }
 
 .story-panel header p {
-  margin: 0 0 1.2rem;
-  color: rgba(255, 255, 255, 0.62);
+  margin: 0 0 1.5rem;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
 }
 
 .story-panel ul {
@@ -2001,46 +2147,76 @@ watch(
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.25rem;
 }
 
 .story-panel li {
   display: grid;
-  grid-template-columns: 70px 1fr;
-  gap: 1rem;
+  grid-template-columns: 80px 1fr;
+  gap: 1.25rem;
   align-items: baseline;
+  padding: 1rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  transition: all 0.2s ease;
+}
+
+.story-panel li:hover {
+  background: rgba(255, 255, 255, 0.04);
+  transform: translateX(4px);
 }
 
 .story-time {
-  font-size: 0.9rem;
-  color: rgba(29, 185, 84, 0.9);
+  font-size: 0.95rem;
+  color: var(--spotify-green-bright);
   font-weight: 600;
+  font-family: 'Courier New', monospace;
+}
+
+.story-panel li strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: #fff;
+  font-size: 1.05rem;
+}
+
+.story-panel li p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.65);
+  line-height: 1.5;
 }
 
 .flow-plan {
   padding: 2rem;
-  border-radius: 22px;
-  background: rgba(12, 12, 12, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 0 26px 42px rgba(0, 0, 0, 0.32);
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(24, 24, 24, 0.95), rgba(12, 12, 12, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 22px 40px rgba(0, 0, 0, 0.3);
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
-  height: 100%;
+  gap: 1.5rem;
 }
+
 .flow-plan h2 {
-  margin-top: 0;
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
 }
-.flow-plan p {
-  color: rgba(255, 255, 255, 0.68);
+
+.flow-plan > p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
 }
+
 .flow-plan ul {
-  margin: 1.2rem 0 0;
-  padding-left: 1.2rem;
-  color: rgba(255, 255, 255, 0.65);
+  margin: 1rem 0 0;
+  padding-left: 1.3rem;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.7;
 }
+
 .flow-plan li {
-  margin-bottom: 0.6rem;
+  margin-bottom: 0.65rem;
 }
 
 .timecapsule-summary,
@@ -2056,7 +2232,6 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 1.75rem;
-  height: 100%;
 }
 
 .timecapsule-detail {
@@ -2324,6 +2499,81 @@ watch(
   color: var(--spotify-green-bright);
 }
 
+/* Playlist Health Header - Compact Card */
+.playlist-header-card {
+  padding: 1.5rem 2rem;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(29, 185, 84, 0.15), rgba(29, 185, 84, 0.08));
+  border: 1px solid rgba(29, 185, 84, 0.25);
+  margin-bottom: 1.5rem;
+}
+
+.playlist-header-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.playlist-header-content h2 {
+  margin: 0 0 0.25rem 0;
+  font-size: 1.5rem;
+}
+
+.playlist-header-content > div > p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.95rem;
+}
+
+.playlist-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.playlist-source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.95rem;
+  border-radius: 999px;
+  background: rgba(29, 185, 84, 0.2);
+  border: 1px solid rgba(29, 185, 84, 0.3);
+  color: var(--spotify-green-bright);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.playlist-rescan-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(29, 185, 84, 0.35);
+  background: rgba(29, 185, 84, 0.18);
+  color: var(--spotify-green-bright);
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.playlist-rescan-btn:not(:disabled):hover {
+  background: rgba(29, 185, 84, 0.28);
+  border-color: rgba(29, 185, 84, 0.45);
+  transform: translateY(-1px);
+}
+
+.playlist-rescan-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+
+/* Playlist Report Body */
 .playlist-report {
   padding: 2rem;
   border-radius: 22px;
@@ -2332,130 +2582,215 @@ watch(
   box-shadow: 0 26px 44px rgba(0, 0, 0, 0.32);
 }
 
-.playlist-report h2 {
-  margin-top: 0;
-}
-
-.playlist-report__header {
-  display: flex;
-  justify-content: space-between;
-  gap: 1.5rem;
-  flex-wrap: wrap;
-}
-
-.playlist-report__controls {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.playlist-report__controls button {
-  padding: 0.5rem 1.2rem;
-  border-radius: 999px;
-  border: none;
-  background: rgba(29, 185, 84, 0.22);
-  color: var(--spotify-green-bright);
-  cursor: pointer;
-}
-
-.playlist-report__controls button:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.playlist-report__controls button:not(:disabled):hover {
-  background: rgba(29, 185, 84, 0.3);
-}
-
-.playlist-report__badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.35rem 0.85rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  font-size: 0.75rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
 .playlist-report__state {
-  margin-top: 1.5rem;
-  padding: 1.2rem;
-  border-radius: 16px;
-  background: rgba(24, 24, 24, 0.82);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 3rem 2rem;
+  border-radius: 18px;
+  background: rgba(24, 24, 24, 0.6);
   border: 1px solid rgba(255, 255, 255, 0.04);
+  text-align: center;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.playlist-report__state p {
+  margin: 0;
 }
 
 .playlist-report__state--error {
   border-color: rgba(255, 99, 71, 0.35);
+  background: rgba(255, 99, 71, 0.08);
+}
+
+.playlist-report__state--error p {
   color: rgba(255, 186, 163, 0.95);
 }
 
+.loading-spinner-large {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 50%;
+  border: 3px solid rgba(29, 185, 84, 0.2);
+  border-top-color: var(--spotify-green-bright);
+  animation: spin 0.8s linear infinite;
+}
+
+.playlist-report__success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 3rem 2rem;
+  border-radius: 18px;
+  background: rgba(29, 185, 84, 0.08);
+  border: 1px solid rgba(29, 185, 84, 0.2);
+  text-align: center;
+}
+
+.success-icon {
+  width: 4rem;
+  height: 4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(29, 185, 84, 0.2);
+  color: var(--spotify-green-bright);
+  font-size: 2rem;
+  font-weight: bold;
+}
+
+.playlist-report__success h3 {
+  margin: 0.5rem 0 0;
+  color: var(--spotify-green-bright);
+}
+
+.playlist-report__success p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.7);
+}
+
 .retry-button {
-  padding: 0.5rem 1.3rem;
+  padding: 0.6rem 1.5rem;
   border-radius: 999px;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
   cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s ease;
 }
 
 .retry-button:hover {
   background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
 }
 
-.playlist-report__state--error .retry-button {
-  margin-top: 0.9rem;
-}
-
+/* Report Columns */
 .report-columns {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 1.5rem;
-  margin-top: 1.5rem;
 }
 
-.report-columns ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.report-column {
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
 
-.report-columns li {
-  padding: 1rem;
-  border-radius: 16px;
+.report-column-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border-radius: 14px;
+  background: rgba(24, 24, 24, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.report-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.report-column-header h3 {
+  margin: 0;
+  flex: 1;
+  font-size: 1.1rem;
+}
+
+.report-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  padding: 0 0.5rem;
+  border-radius: 999px;
+  background: rgba(29, 185, 84, 0.2);
+  color: var(--spotify-green-bright);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.report-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.report-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.25rem;
+  border-radius: 14px;
   background: rgba(24, 24, 24, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.04);
+  transition: all 0.2s ease;
 }
 
-.report-columns p {
-  margin: 0.35rem 0 0.75rem;
-  color: rgba(255, 255, 255, 0.55);
+.report-item:hover {
+  background: rgba(28, 28, 28, 0.95);
+  border-color: rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
 }
 
-.report-columns button {
-  padding: 0.45rem 1.1rem;
+.report-item__track {
+  display: block;
+  color: #fff;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.report-item__note {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.report-item__action {
+  align-self: flex-start;
+  padding: 0.5rem 1.1rem;
   border-radius: 999px;
-  border: none;
-  background: rgba(29, 185, 84, 0.22);
+  border: 1px solid rgba(29, 185, 84, 0.3);
+  background: rgba(29, 185, 84, 0.15);
   color: var(--spotify-green-bright);
   cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
 }
 
-.report-columns button:hover {
-  background: rgba(29, 185, 84, 0.3);
+.report-item__action:hover {
+  background: rgba(29, 185, 84, 0.25);
+  border-color: rgba(29, 185, 84, 0.4);
+  transform: translateY(-1px);
 }
 
 .report-empty {
-  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem;
   border-radius: 14px;
-  background: rgba(24, 24, 24, 0.6);
-  border: 1px dashed rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.5);
+  background: rgba(29, 185, 84, 0.08);
+  border: 1px solid rgba(29, 185, 84, 0.15);
+  color: rgba(29, 185, 84, 0.9);
   font-size: 0.9rem;
+}
+
+.report-empty span {
+  font-weight: bold;
 }
 
 @media (max-width: 1080px) {

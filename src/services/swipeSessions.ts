@@ -1,5 +1,6 @@
 import { API_BASE_URL } from '../config';
 import { getDemoLikedTrackIds } from '../data/demoLibraryCache';
+import { getSessionCredentials, isAuthError, handleAuthError } from './session';
 
 export interface StartSessionPayload {
   userId: string;
@@ -140,13 +141,15 @@ async function postJson<T>(path: string, body: object): Promise<T> {
   const base = API_BASE_URL || ''
   const url = `${base}${path}`
 
+  const requestBody = { ...getSessionCredentials(), ...body }
+
   let response: Response
 
   try {
     response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(requestBody)
     })
   } catch (networkError) {
     const message =
@@ -165,9 +168,15 @@ async function postJson<T>(path: string, body: object): Promise<T> {
         errorMessage = String(parsed.error)
       }
     } catch {
-      // ignore JSON parse errors and use raw text
     }
-    throw new Error(errorMessage);
+    
+    const error = new Error(errorMessage);
+    
+    if (isAuthError(error)) {
+      handleAuthError(error)
+    }
+    
+    throw error;
   }
 
   const payload = await response.text();

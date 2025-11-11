@@ -1,5 +1,6 @@
 import { API_BASE_URL } from '../config';
 import { getTracks, type TrackMetadata } from './libraryCache';
+import { getSessionCredentials, isAuthError, handleAuthError } from './session';
 
 export type TimeCapsuleSource =
   | 'api-scores'
@@ -118,25 +119,18 @@ function normalisePreviewEntry(entry: unknown): PreviewItem | null {
     const scoreCandidate = item.score ?? item.staleness ?? item.value ?? item.weight;
     const score = typeof scoreCandidate === 'number' ? scoreCandidate : undefined;
     
-      // Extract lastPlayedAt WITHOUT falling back to addedAt
-      const lastPlayedCandidate =
-        item.lastPlayedAt ??
-        item.last_played_at ??
-        item.lastTouchedAt ??
-        item.lastTouched ??
-        item.last_seen_at;
-      const lastPlayedAt = typeof lastPlayedCandidate === 'number' ? lastPlayedCandidate : undefined;
+    const lastPlayedCandidate =
+      item.lastPlayedAt ??
+      item.last_played_at ??
+      item.lastTouchedAt ??
+      item.lastTouched ??
+      item.last_seen_at;
+    const lastPlayedAt = typeof lastPlayedCandidate === 'number' ? lastPlayedCandidate : undefined;
     
-      // Extract addedAt separately
-      const addedAtCandidate = item.addedAt ?? item.added_at;
-      const addedAt = typeof addedAtCandidate === 'number' ? addedAtCandidate : undefined;
-    
-      // Debug logging for staleness issue
-      if (trackId && (lastPlayedAt || addedAt)) {
-        console.log(`[TimeCapsule] Track ${trackId}: lastPlayedAt=${lastPlayedAt}, addedAt=${addedAt}, score=${score}`);
-      }
+    const addedAtCandidate = item.addedAt ?? item.added_at;
+    const addedAt = typeof addedAtCandidate === 'number' ? addedAtCandidate : undefined;
 
-      return { trackId, score, lastPlayedAt, addedAt };
+    return { trackId, score, lastPlayedAt, addedAt };
   }
 
   return null;
@@ -148,7 +142,7 @@ interface PreviewResult {
 }
 
 async function requestPreview(userId: string, size: number): Promise<PreviewResult> {
-  const payload = { userId, size };
+  const payload = { ...getSessionCredentials(), userId, size };
   let lastError: unknown = null;
 
   for (const endpoint of TRACK_SCORING_ENDPOINTS) {
@@ -161,7 +155,13 @@ async function requestPreview(userId: string, size: number): Promise<PreviewResu
 
       if (!response.ok) {
         const message = await response.text();
-        throw new Error(message || `TrackScoring request failed: ${response.status}`);
+        const error = new Error(message || `TrackScoring request failed: ${response.status}`);
+        
+        if (isAuthError(error)) {
+          handleAuthError(error);
+        }
+        
+        throw error;
       }
 
       const data = await response.json();
@@ -228,21 +228,13 @@ function finaliseTracks(items: IntermediateTrack[]): TimeCapsuleTrack[] {
 
       let staleness: number;
       
-      // Priority 1: Use backend's score if available
       if (typeof item.scoreHint === 'number') {
         staleness = Math.round(item.scoreHint);
       } 
-      // Priority 2: Calculate from lastPlayedMs with heavy weighting on recency
       else if (typeof item.lastPlayedMs === 'number' && diffs.length) {
         const ageMs = now - item.lastPlayedMs;
         const ageYears = ageMs / (365 * 24 * 60 * 60 * 1000);
         
-        // More aggressive scoring: 
-        // - < 1 year: 0-30
-        // - 1-2 years: 30-50
-        // - 2-3 years: 50-70
-        // - 3-5 years: 70-90
-        // - 5+ years: 90-100
         if (ageYears < 1) {
           staleness = Math.min(30, Math.round(ageYears * 30));
         } else if (ageYears < 2) {
@@ -255,7 +247,6 @@ function finaliseTracks(items: IntermediateTrack[]): TimeCapsuleTrack[] {
           staleness = 90 + Math.min(10, Math.round((ageYears - 5) * 2));
         }
       } 
-      // Priority 3: No timestamp data
       else {
         staleness = 70 - index * 3;
       }
@@ -270,9 +261,6 @@ function finaliseTracks(items: IntermediateTrack[]): TimeCapsuleTrack[] {
       } satisfies TimeCapsuleTrack;
     });
 
-  // Always randomize the track order for variety
-  console.log('[TimeCapsule] Randomizing', processed.length, 'tracks');
-  
   return processed
     .map((track) => ({ ...track, _rand: Math.random() }))
     .sort((a, b) => b._rand - a._rand)
@@ -309,8 +297,6 @@ async function buildTracks(preview: PreviewItem[]): Promise<IntermediateTrack[]>
     const title = meta?.title ?? snapshotMeta?.title ?? entry.trackId;
     const artist = meta?.artist ?? snapshotMeta?.artist ?? 'Unknown artist';
 
-    // Only use lastPlayedAt from backend - do NOT fall back to addedAt/likedAt
-    // The backend should be handling the max(lastPlayedAt, likedAt) logic
     const lastPlayedMs = toMilliseconds(entry.lastPlayedAt);
 
     return {
@@ -363,7 +349,6 @@ export async function loadTimeCapsuleTracks(
   let previewSource: PreviewSource | null = null;
   let encounteredError = false;
   
-  // Fetch 500 tracks from backend for better variety, then randomize and take the requested size
   const fetchSize = 500;
 
   try {

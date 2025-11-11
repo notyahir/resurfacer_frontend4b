@@ -1,5 +1,6 @@
 import { API_BASE_URL } from '../config'
 import { getDemoLikedTrackIds, getDemoTrackMeta } from '../data/demoLibraryCache'
+import { getSessionCredentials, isAuthError, handleAuthError } from './session'
 
 type HttpMethod = 'GET' | 'POST'
 
@@ -7,6 +8,10 @@ const LIBRARY_BASE_PATHS = ['/api/LibraryCache', '/api/librarycache', '/api/libr
 
 async function requestJson<T>(path: string, method: HttpMethod, body?: object): Promise<T> {
   let lastError: unknown = null
+
+  const requestBody = method === 'POST' 
+    ? { ...getSessionCredentials(), ...(body ?? {}) }
+    : undefined
 
   for (const base of LIBRARY_BASE_PATHS) {
     const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base
@@ -17,12 +22,18 @@ async function requestJson<T>(path: string, method: HttpMethod, body?: object): 
       const response = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: method === 'POST' ? JSON.stringify(body ?? {}) : undefined
+        body: requestBody ? JSON.stringify(requestBody) : undefined
       })
 
       if (!response.ok) {
         const text = await response.text()
-        throw new Error(text || `LibraryCache request failed (${response.status}) at ${endpoint}`)
+        const error = new Error(text || `LibraryCache request failed (${response.status}) at ${endpoint}`)
+        
+        if (isAuthError(error)) {
+          handleAuthError(error)
+        }
+        
+        throw error
       }
 
       const text = await response.text()
@@ -85,7 +96,6 @@ export async function getLikedTracks(userId: string): Promise<LikedTracksResult>
         return { trackIds, source: 'api' }
       }
     } catch (error) {
-      // Try next variant; fall back to demo data after loop
     }
   }
 

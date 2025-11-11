@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config'
+import { getSessionCredentials, isAuthError, handleAuthError } from './session'
 
 const PLATFORM_BASE_PATHS = [
 	'/api/PlatformLink',
@@ -44,9 +45,11 @@ export interface AuthCompleteParams {
 	code: string
 }
 
-async function postJson<T>(methodName: string, body?: object): Promise<T> {
+async function postJson<T>(methodName: string, body?: object, skipAuth = false): Promise<T> {
 	let lastError: unknown = null
 	const endpoint = methodName.startsWith('/') ? methodName : `/${methodName}`
+
+	const requestBody = skipAuth ? (body ?? {}) : { ...getSessionCredentials(), ...(body ?? {}) }
 
 	for (const base of PLATFORM_BASE_PATHS) {
 		const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base
@@ -56,16 +59,22 @@ async function postJson<T>(methodName: string, body?: object): Promise<T> {
 			const response = await fetch(url, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body ?? {})
+				body: JSON.stringify(requestBody)
 			})
 
 			const text = await response.text()
 			if (!response.ok) {
-				throw new PlatformLinkRequestError(
+				const error = new PlatformLinkRequestError(
 					`PlatformLink request failed (${response.status}) at ${endpoint}`,
 					response.status,
 					text
 				)
+				
+				if (isAuthError(error)) {
+					handleAuthError(error)
+				}
+				
+				throw error
 			}
 
 			if (!text) {
@@ -93,8 +102,6 @@ async function postJson<T>(methodName: string, body?: object): Promise<T> {
 			)
 		} catch (error) {
 			if (error instanceof PlatformLinkRequestError) {
-				// If the backend responded (non-404), surface it immediately instead of
-				// falling back to alternate casings that would mask the original status.
 				if (error.status && error.status !== 404) {
 					throw error
 				}
@@ -115,7 +122,7 @@ export async function startAuth(params: AuthStartParams): Promise<AuthStartRespo
 }
 
 export async function completeAuth(params: AuthCompleteParams): Promise<LinkHandle> {
-	const payload = await postJson<any>('completeAuth', params)
+	const payload = await postJson<any>('completeAuth', params, true)
 	const linkId: string | undefined = payload?.linkId ?? payload?.id ?? payload?.link?.id
 	if (!linkId) {
 		throw new Error('PlatformLink.completeAuth did not return a linkId')
