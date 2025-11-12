@@ -2,16 +2,12 @@
 
 Frontend for Resurfacer - rediscover forgotten tracks in your Spotify library.
 
-## Latest (4c)
-
-Authentication now required for backend API. Session auto-initializes with demo user. See [FRONTEND_UPDATES.md](FRONTEND_UPDATES.md) for details.
-
 ## Table of Contents
 ### 4c 
 1. [Design Document](https://github.com/notyahir/resurfacer_4a/DesignDoc.md)
 2. [Reflection Document](https://github.com/notyahir/resurfacer_4a/ReflectionDoc.md)
-3. [Resurfacer Walkthrough]()
-4. [Resurfacer Wakthrough on Youtube]()
+3. [Resurfacer Walkthrough](ResurfacerFnalCompressed.mp4)
+4. [Resurfacer Wakthrough on Youtube](https://youtu.be/uGwBc_sFEJM)
 5. [Trace Actions](https://github.com/notyahir/resurfacer_4a/TraceActions.md)
 6. [Frontend Codebase](https://github.com/notyahir/resurfacer_4a)
 7. [Backend Codebase](https://github.com/notyahir/resurfacer_frontend4b)
@@ -35,3 +31,6 @@ Authentication now required for backend API. Session auto-initializes with demo 
 - [Backend Repo](https://github.com/notyahir/resurfacer_4a)
 - [Frontend Repo](https://github.com/notyahir/resurfacer_frontend4b)
 
+## Latest (4c)
+
+Authentication now required for backend API. Session auto-initializes with demo user. See [FRONTEND_UPDATES.md](FRONTEND_UPDATES.md) for details.
