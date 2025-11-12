@@ -3,18 +3,28 @@ const USER_ID_KEY = 'userId'
 
 export function initializeSession(): void {
 	const existing = getSessionToken()
-	if (existing) {
+	const existingUserId = getUserId()
+	
+	// MIGRATION: Clear demo-user sessions to force re-authentication
+	if (existing && existingUserId === 'demo-user') {
+		console.warn('Found demo-user session, clearing to force re-authentication')
+		clearSession()
+	}
+	
+	if (existing && getUserId()) {
 		console.log('Session already initialized:', { userId: getUserId(), hasToken: true })
 		return
 	}
 
-	const userId = 'demo-user'
-	const sessionToken = `session:${userId}`
+	// Initialize with a temporary session - user must authenticate to get real userId
+	const tempUserId = `temp-${Date.now()}`
+	const sessionToken = `session:${tempUserId}`
 	
 	localStorage.setItem(SESSION_TOKEN_KEY, sessionToken)
-	localStorage.setItem(USER_ID_KEY, userId)
+	localStorage.setItem(USER_ID_KEY, tempUserId)
 	
-	console.log('Session initialized:', { userId, sessionToken })
+	console.log('Temporary session initialized:', { userId: tempUserId, sessionToken })
+	console.log('Please connect your Spotify account to continue')
 }
 
 export function getSessionToken(): string | null {
