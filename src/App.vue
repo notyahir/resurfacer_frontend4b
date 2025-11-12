@@ -134,10 +134,10 @@ const SPOTIFY_SCOPES = [
 	'playlist-read-collaborative'
   ]
   const SPOTIFY_REDIRECT_PATH = '/callback'
-  // const SPOTIFY_REDIRECT_HOST = import.meta.env.PROD 
-  //   ? 'resurfacer.onrender.com' 
-  //   : '127.0.0.1:5173'
-  const SPOTIFY_REDIRECT_HOST = '127.0.0.1:5173'
+  const SPOTIFY_REDIRECT_HOST = import.meta.env.PROD 
+    ? 'resurfacer.onrender.com' 
+    : '127.0.0.1:5173'
+  // const SPOTIFY_REDIRECT_HOST = '127.0.0.1:5173'
   const currentLink = ref<LinkHandle | null>(null)
 const playlistFindings = reactive({
 	duplicates: [] as PlaylistIssue[],
