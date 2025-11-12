@@ -22,6 +22,7 @@ export class PlatformLinkRequestError extends Error {
 
 export interface LinkHandle {
 	linkId: string
+	userId?: string
 	platform?: string
 	tokenExpiration?: number
 	scopes?: string[]
@@ -127,13 +128,14 @@ export async function completeAuth(params: AuthCompleteParams): Promise<LinkHand
 	if (!linkId) {
 		throw new Error('PlatformLink.completeAuth did not return a linkId')
 	}
+	const userId: string | undefined = payload?.userId ?? payload?.user?.id ?? payload?.ownerId
 	const tokenExpiration = typeof payload?.tokenExpiration === 'number'
 		? payload.tokenExpiration
 		: typeof payload?.newExpiration === 'number'
 			? payload.newExpiration
 			: undefined
 	const scopes = Array.isArray(payload?.scopes) ? payload.scopes : undefined
-	return { linkId, platform: payload?.platform, tokenExpiration, scopes }
+	return { linkId, userId, platform: payload?.platform, tokenExpiration, scopes }
 }
 
 function normalizeLinkResponse(payload: any): LinkHandle[] {

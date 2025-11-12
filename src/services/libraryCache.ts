@@ -1,5 +1,4 @@
 import { API_BASE_URL } from '../config'
-import { getDemoLikedTrackIds, getDemoTrackMeta } from '../data/demoLibraryCache'
 import { getSessionCredentials, isAuthError, handleAuthError } from './session'
 
 type HttpMethod = 'GET' | 'POST'
@@ -99,12 +98,6 @@ export async function getLikedTracks(userId: string): Promise<LikedTracksResult>
     }
   }
 
-  const fallbackIds = getDemoLikedTrackIds()
-  if (fallbackIds.length) {
-    console.warn('LibraryCache fallback: serving offline liked tracks snapshot.')
-    return { trackIds: fallbackIds, source: 'offline-demo' }
-  }
-
   return { trackIds: [], source: 'api' }
 }
 
@@ -158,25 +151,6 @@ function normaliseTrackMetadata(entry: any): TrackMetadata | null {
   }
 }
 
-function fallbackDemoTrack(trackId: string): TrackMetadata | null {
-  const demo = getDemoTrackMeta(trackId)
-  if (!demo) {
-    return null
-  }
-
-  return {
-    trackId,
-    title: demo.title,
-    artist: demo.artist,
-    available: demo.available,
-    tempo: typeof demo.tempo === 'number' ? demo.tempo : null,
-    energy: typeof demo.energy === 'number' ? demo.energy : null,
-    valence: typeof demo.valence === 'number' ? demo.valence : null,
-    album: undefined,
-    source: 'demo'
-  }
-}
-
 export async function getTracks(trackIds: string[]): Promise<TrackMetadata[]> {
   const uniqueIds = Array.from(new Set(trackIds.filter(Boolean)))
   if (!uniqueIds.length) {
@@ -191,23 +165,10 @@ export async function getTracks(trackIds: string[]): Promise<TrackMetadata[]> {
         ? payload.map(normaliseTrackMetadata).filter((item: TrackMetadata | null): item is TrackMetadata => item !== null)
         : []
 
-    const byId = new Map(records.map((record) => [record.trackId, record]))
-
-    for (const id of uniqueIds) {
-      if (!byId.has(id)) {
-        const fallback = fallbackDemoTrack(id)
-        if (fallback) {
-          byId.set(id, fallback)
-        }
-      }
-    }
-
-    return Array.from(byId.values())
+    return records
   } catch (error) {
-    console.warn('LibraryCache.getTracks failed; falling back to demo metadata.', error)
-    return uniqueIds
-      .map(fallbackDemoTrack)
-      .filter((item): item is TrackMetadata => item !== null)
+    console.error('LibraryCache.getTracks failed:', error)
+    return []
   }
 }
 
@@ -235,3 +196,4 @@ export async function loadDemoSnapshot(): Promise<LibrarySnapshotPayload> {
   }
   return response.json()
 }
+

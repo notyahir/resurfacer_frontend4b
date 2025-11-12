@@ -42,6 +42,17 @@ export function clearSession(): void {
 	console.log('Session cleared')
 }
 
+export function updateSession(userId: string, sessionToken?: string): void {
+	localStorage.setItem(USER_ID_KEY, userId)
+	if (sessionToken) {
+		localStorage.setItem(SESSION_TOKEN_KEY, sessionToken)
+	} else {
+		// If no token provided, generate one based on userId
+		localStorage.setItem(SESSION_TOKEN_KEY, `session:${userId}`)
+	}
+	console.log('Session updated:', { userId, sessionToken: sessionToken || `session:${userId}` })
+}
+
 export function isAuthError(error: unknown): boolean {
 	if (error instanceof Error) {
 		const message = error.message.toLowerCase()

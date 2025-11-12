@@ -20,6 +20,8 @@ import {
   syncLibraryFromSpotify,
   type LinkHandle
 } from './services/platformLink'
+import { updateSession } from './services/session'
+import { getUserId } from './services/session'
 import {
   ingestFromLibrary as ingestTrackScoringFromLibrary,
   type BootstrapResult
@@ -89,18 +91,12 @@ const permissionOptions = reactive([
 
 const enabledPermissions = ref<string[]>(['likes', 'playlists'])
 
-const insights = [
-  { label: 'Tracks resurfaced this week', value: '132' },
-  { label: 'Playlists tuned', value: '8' },
-  { label: 'Stale tracks snoozed', value: '29' }
-]
-
 const journeyCards = [
   {
     id: 'timecapsule',
     title: 'Time-Capsule',
     description: 'Find tracks you haven\'t listened to in a while.',
-    detail: '8 tracks ready',
+    detail: 'Rediscover old favorites',
     cta: 'Browse tracks',
     stage: 'timecapsule' as Stage
   },
@@ -127,7 +123,7 @@ const timeCapsuleLoading = ref(false)
 const timeCapsuleError = ref<string | null>(null)
 const timeCapsuleSource = ref<TimeCapsuleSource>('snapshot')
 
-const ACTIVE_USER_ID = 'demo-user'
+const ACTIVE_USER_ID = computed(() => getUserId() || 'demo-user')
 const OAUTH_STATE_STORAGE_KEY = 'resurfacer:spotifyAuthState'
 const PERMISSIONS_STORAGE_KEY = 'resurfacer:enabledPermissions'
 const SPOTIFY_SCOPES = [
@@ -138,9 +134,10 @@ const SPOTIFY_SCOPES = [
 	'playlist-read-collaborative'
   ]
   const SPOTIFY_REDIRECT_PATH = '/callback'
-  const SPOTIFY_REDIRECT_HOST = import.meta.env.PROD 
-    ? 'resurfacer.onrender.com' 
-    : '127.0.0.1:5173'
+  // const SPOTIFY_REDIRECT_HOST = import.meta.env.PROD 
+  //   ? 'resurfacer.onrender.com' 
+  //   : '127.0.0.1:5173'
+  const SPOTIFY_REDIRECT_HOST = '127.0.0.1:5173'
   const currentLink = ref<LinkHandle | null>(null)
 const playlistFindings = reactive({
 	duplicates: [] as PlaylistIssue[],
@@ -351,12 +348,12 @@ async function connectAccount() {
     const protocol = import.meta.env.PROD ? 'https' : 'http'
     const redirectUri = `${protocol}://${SPOTIFY_REDIRECT_HOST}${SPOTIFY_REDIRECT_PATH}`
     const { authorizeUrl, state } = await startAuth({
-      userId: ACTIVE_USER_ID,
+      userId: ACTIVE_USER_ID.value,
       platform: 'spotify',
       scopes: SPOTIFY_SCOPES,
       redirectUri
     })
-    const payload = { state, userId: ACTIVE_USER_ID, createdAt: Date.now() }
+    const payload = { state, userId: ACTIVE_USER_ID.value, createdAt: Date.now() }
     sessionStorage.setItem(OAUTH_STATE_STORAGE_KEY, JSON.stringify(payload))
     window.location.href = authorizeUrl
   } catch (error) {
@@ -453,6 +450,13 @@ async function processOAuthCallback(): Promise<boolean> {
     currentLink.value = link
     connected.value = true
     
+    // Update session with user ID from OAuth response
+    if (!link.userId) {
+      throw new Error('Backend did not return userId in completeAuth response')
+    }
+    updateSession(link.userId)
+    console.log('Session updated with authenticated user:', link.userId)
+    
     // Restore permissions from storage
     const storedPerms = sessionStorage.getItem(PERMISSIONS_STORAGE_KEY)
     if (storedPerms) {
@@ -486,7 +490,7 @@ async function processOAuthCallback(): Promise<boolean> {
 
 async function hydrateExistingLink() {
   try {
-    const links = await listLinks(ACTIVE_USER_ID)
+    const links = await listLinks(ACTIVE_USER_ID.value)
     if (!links.length) {
       currentLink.value = null
       connected.value = false
@@ -602,7 +606,7 @@ async function refreshLikedTracks() {
   likedTracksLoading.value = true
 
   try {
-    const result = await getLikedTracks(ACTIVE_USER_ID)
+    const result = await getLikedTracks(ACTIVE_USER_ID.value)
     likedTracksSource.value = result.source
     if (result.trackIds.length) {
       const unique = Array.from(new Set(result.trackIds))
@@ -610,6 +614,7 @@ async function refreshLikedTracks() {
       likedTrackIds.value = unique
     } else {
       likedTrackIds.value = []
+      swipeQueue.value = []  // Clear swipe queue when no tracks found
     }
   } catch (error) {
     likedTracksError.value = error instanceof Error ? error.message : 'Unable to load liked tracks.'
@@ -651,8 +656,8 @@ async function refreshPlaylistHealth() {
 
   try {
     const trackIds = sampleTrackIds(baseIds, 200)
-    const playlistId = `liked:${ACTIVE_USER_ID}`
-    const { snapshotId } = await createSnapshot({ playlistId, userId: ACTIVE_USER_ID, trackIds })
+    const playlistId = `liked:${ACTIVE_USER_ID.value}`
+    const { snapshotId } = await createSnapshot({ playlistId, userId: ACTIVE_USER_ID.value, trackIds })
     const { reportId } = await analyzeSnapshot({ playlistId, snapshotId })
     const report = await getReport({ reportId })
     const groups = await buildIssuesFromFindings(Array.isArray(report.findings) ? report.findings : [])
@@ -672,7 +677,7 @@ async function resyncLibrary() {
   librarySyncing.value = true
 
   try {
-    const bootstrap = await syncLibraryAndScores(ACTIVE_USER_ID)
+    const bootstrap = await syncLibraryAndScores(ACTIVE_USER_ID.value)
     lastSyncSummary.value = describeBootstrap(bootstrap)
   await refreshLikedTracks()
   await Promise.all([refreshTimeCapsule(), refreshPlaylistHealth()])
@@ -885,7 +890,7 @@ async function refreshTimeCapsule() {
   timeCapsuleLoading.value = true
 
   try {
-    const { tracks, source } = await loadTimeCapsuleTracks(ACTIVE_USER_ID, 12)
+    const { tracks, source } = await loadTimeCapsuleTracks(ACTIVE_USER_ID.value, 12)
     timeCapsuleQueue.value = tracks
     timeCapsuleSource.value = source
   } catch (error) {
@@ -1045,14 +1050,14 @@ watch(
               <li>Start exploring your music library.</li>
             </ul>
             <div class="connect-status" role="status">
-              <p>
+              <div class="connect-status-item">
                 <strong>Library sync</strong>
                 <span>{{ librarySyncing ? 'Syncing…' : lastSyncSummary ?? 'Not synced yet' }}</span>
-              </p>
-              <p>
+              </div>
+              <div class="connect-status-item">
                 <strong>Liked tracks</strong>
                 <span>{{ likedTracksSourceLabel }}</span>
-              </p>
+              </div>
               <p v-if="likedTracksLoading" class="connect-status__hint">Loading liked tracks…</p>
               <p v-if="likedTracksError" class="connect-error">{{ likedTracksError }}</p>
               <p v-else-if="connectError" class="connect-error">{{ connectError }}</p>
@@ -1122,13 +1127,6 @@ watch(
             <span class="journey-card__detail">{{ card.detail }}</span>
             <button :disabled="!connected" type="button" @click="goToStage(card.stage)">{{ card.cta }}</button>
             <p v-if="!connected" class="journey-card__locked">Connect to unlock this flow.</p>
-          </article>
-        </section>
-
-        <section class="insights">
-          <article v-for="item in insights" :key="item.label" class="insight">
-            <span class="insight__value">{{ item.value }}</span>
-            <span class="insight__label">{{ item.label }}</span>
           </article>
         </section>
 
@@ -1760,13 +1758,25 @@ watch(
 
 .connect-status {
   margin-top: 1.5rem;
-  padding: 1rem 1.25rem;
-  border-radius: 16px;
-  background: rgba(29, 185, 84, 0.08);
-  border: 1px solid rgba(29, 185, 84, 0.22);
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: 0.75rem;
+}
+
+.connect-status-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.connect-status-item strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+}
+
+.connect-status-item span {
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .connect-status p {
@@ -1930,9 +1940,9 @@ watch(
   gap: 1rem;
   padding: 2rem;
   border-radius: 20px;
-  background: linear-gradient(145deg, rgba(24, 24, 24, 0.95), rgba(12, 12, 12, 0.9));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 22px 36px rgba(0, 0, 0, 0.28);
+  background: rgba(24, 24, 24, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   transition: all 0.3s ease;
   overflow: hidden;
 }
@@ -1950,9 +1960,9 @@ watch(
 }
 
 .journey-card:hover {
-  transform: translateY(-4px);
+  transform: translateY(-2px);
   border-color: rgba(29, 185, 84, 0.3);
-  box-shadow: 0 28px 48px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
 }
 
 .journey-card:hover::before {
@@ -2503,11 +2513,9 @@ watch(
 
 /* Playlist Health Header - Compact Card */
 .playlist-header-card {
-  padding: 1.5rem 2rem;
-  border-radius: 18px;
-  background: linear-gradient(135deg, rgba(29, 185, 84, 0.15), rgba(29, 185, 84, 0.08));
-  border: 1px solid rgba(29, 185, 84, 0.25);
+  padding: 1.5rem 0;
   margin-bottom: 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .playlist-header-content {
