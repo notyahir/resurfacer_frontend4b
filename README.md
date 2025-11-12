@@ -9,8 +9,8 @@ Frontend for Resurfacer - rediscover forgotten tracks in your Spotify library.
 3. [Resurfacer Walkthrough](ResurfacerFnalCompressed.mp4)
 4. [Resurfacer Wakthrough on Youtube](https://youtu.be/uGwBc_sFEJM)
 5. [Trace Actions](https://github.com/notyahir/resurfacer_4a/TraceActions.md)
-6. [Frontend Codebase](https://github.com/notyahir/resurfacer_4a)
-7. [Backend Codebase](https://github.com/notyahir/resurfacer_frontend4b)
+6. [Frontend Codebase](https://github.com/notyahir/resurfacer_frontend4b)
+7. [Backend Codebase](https://github.com/notyahir/resurfacer_4a)
 
 ### 4b Final
 1. [User Journey](4bdeliverables/userjourney.md)
